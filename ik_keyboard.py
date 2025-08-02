@@ -17,6 +17,9 @@ from _solve_ik_with_multiple_targets import solve_ik_with_multiple_targets
 from flask import Flask, jsonify
 import threading
 from pynput import keyboard
+import asyncio
+from vuer import Vuer, VuerSession
+from vuer.schemas import Hands
 
 
 # Global variables to store robot state
