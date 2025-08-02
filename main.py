@@ -161,26 +161,26 @@ class HumanoidPlaceAppleInBowl(HumanoidPickPlaceEnv):
         builder.initial_pose = sapien.Pose(p=[0, -0.4, 0.753])
         self.bowl = builder.build_kinematic(name="bowl")
 
-        # Load the apple (object to be picked)
+        # Load the cardboard box (object to be picked)
         builder = self.scene.create_actor_builder()
         builder.add_multiple_convex_collisions_from_file(
-            filename=os.path.join(model_dir, "apple_1.ply"),
+            filename=os.path.join(model_dir, "cardboard_box/textured.obj"),
             pose=fix_rotation_pose,
-            scale=[scale * 0.8] * 3,  # Scale down to make apple graspable
+            scale=[scale * 0.08] * 3,  # Scale down by 10x to make box much smaller
         )
         builder.add_visual_from_file(
-            filename=os.path.join(model_dir, "apple_1.glb"),
-            scale=[scale * 0.8] * 3,
+            filename=os.path.join(model_dir, "cardboard_box/textured.obj"),
+            scale=[scale * 0.08] * 3,  # Scale down by 10x to make box much smaller
             pose=fix_rotation_pose,
         )
-        builder.initial_pose = sapien.Pose(p=[0, -0.4, 0.78])
-        self.apple = builder.build(name="apple")
+        builder.initial_pose = sapien.Pose(p=[0.1, -0.4, 0.78])  # Moved box slightly to robot's right
+        self.box = builder.build(name="box")
 
     def evaluate(self):
         """Evaluate success/failure conditions"""
-        # Check if apple is within bowl area
+        # Check if box is within bowl area
         is_obj_placed = (
-            torch.linalg.norm(self.bowl.pose.p - self.apple.pose.p, axis=1) <= 0.05
+            torch.linalg.norm(self.bowl.pose.p - self.box.pose.p, axis=1) <= 0.05
         )
         
         # Check if robot hand is above bowl and outside it
@@ -188,8 +188,8 @@ class HumanoidPlaceAppleInBowl(HumanoidPickPlaceEnv):
             self.agent.right_tcp.pose.p[:, 2] > self.bowl.pose.p[:, 2] + 0.125
         )
         
-        # Check if robot is grasping the apple
-        is_grasped = self.agent.right_hand_is_grasping(self.apple, max_angle=110)
+        # Check if robot is grasping the box
+        is_grasped = self.agent.right_hand_is_grasping(self.box, max_angle=110)
         
         return {
             "success": is_obj_placed & hand_outside_bowl,
@@ -207,9 +207,9 @@ class HumanoidPlaceAppleInBowl(HumanoidPickPlaceEnv):
         if self.obs_mode_struct.use_state:
             obs.update(
                 bowl_pos=self.bowl.pose.p,
-                obj_pose=self.apple.pose.raw_pose,
-                tcp_to_obj_pos=self.apple.pose.p - self.agent.right_tcp.pose.p,
-                obj_to_goal_pos=self.bowl.pose.p - self.apple.pose.p,
+                obj_pose=self.box.pose.raw_pose,
+                tcp_to_obj_pos=self.box.pose.p - self.agent.right_tcp.pose.p,
+                obj_to_goal_pos=self.bowl.pose.p - self.box.pose.p,
             )
         return obs
 
@@ -221,7 +221,7 @@ class HumanoidPlaceAppleInBowl(HumanoidPickPlaceEnv):
         """Compute dense reward for the task"""
         # Reward for reaching the object
         tcp_to_obj_dist = torch.linalg.norm(
-            self.apple.pose.p - self.agent.right_tcp.pose.p, axis=1
+            self.box.pose.p - self.agent.right_tcp.pose.p, axis=1
         )
         reaching_reward = 1 - torch.tanh(5 * tcp_to_obj_dist)
         reward = reaching_reward
@@ -230,10 +230,10 @@ class HumanoidPlaceAppleInBowl(HumanoidPickPlaceEnv):
         is_grasped = info["is_grasped"]
         reward += is_grasped
 
-        # Encourage bringing apple to above the bowl then dropping it
+        # Encourage bringing box to above the bowl then dropping it
         obj_to_goal_dist = torch.linalg.norm(
             (self.bowl.pose.p + torch.tensor([0, 0, 0.15], device=self.device))
-            - self.apple.pose.p,
+            - self.box.pose.p,
             axis=1,
         )
         place_reward = 1 - torch.tanh(5 * obj_to_goal_dist)
@@ -269,7 +269,7 @@ class UnitreeG1PlaceAppleInBowlStandaloneEnv(HumanoidPlaceAppleInBowl):
         self.init_robot_pose = copy.deepcopy(
             UnitreeG1UpperBodyWithHeadCamera.keyframes["standing"].pose
         )
-        self.init_robot_pose.p = [-0.3, 0, 0.755]
+        self.init_robot_pose.p = [-0.3, -0.1, 0.755]
         # Remove max_episode_steps from kwargs as it's handled by the decorator
         kwargs.pop('max_episode_steps', None)
         super().__init__(
@@ -297,12 +297,13 @@ class UnitreeG1PlaceAppleInBowlStandaloneEnv(HumanoidPlaceAppleInBowl):
             self.agent.robot.set_qpos(self.agent.keyframes["standing"].qpos)
             self.agent.robot.set_pose(self.init_robot_pose)
 
-            # Initialize the apple to be within reach
+            # Initialize the box to be within reach (slightly to robot's right)
             xyz = torch.zeros((b, 3))
-            xyz[:, :2] = randomization.uniform(low=-0.025, high=0.025, size=(b, 2))
+            xyz[:, 0] = 0.1 + randomization.uniform(low=-0.025, high=0.025, size=(b, 1))  # Move box slightly to robot's right
+            xyz[:, 1] = -0.55 + randomization.uniform(low=-0.025, high=0.025, size=(b, 1))
             qs = randomization.random_quaternions(b, lock_x=True, lock_y=True)
             xyz[:, 2] = 0.7335
-            self.apple.set_pose(Pose.create_from_pq(xyz, qs))
+            self.box.set_pose(Pose.create_from_pq(xyz, qs))
 
             # Initialize the bowl
             xyz = torch.zeros((b, 3))

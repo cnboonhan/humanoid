@@ -163,7 +163,7 @@ async def handler(event, session):
         # Extract pinch states from hand tracking data
         try:
             if 'leftState' in hand_data.keys():
-                left_hand_pinch_state = hand_data['leftState']['pinch']
+                left_hand_pinch_state = hand_data['leftState']['squeeze']
                 # print(f"Left hand pinch state: {left_hand_pinch_state}")
                 
                 # Update left hand joints based on pinch state
@@ -182,7 +182,7 @@ async def handler(event, session):
         
         try:
             if 'rightState' in hand_data.keys():
-                right_hand_pinch_state = hand_data['rightState']['pinch']
+                right_hand_pinch_state = hand_data['rightState']['squeeze']
                 # print(f"Right hand pinch state: {right_hand_pinch_state}")
              
                 # Update right hand joints based on pinch state
