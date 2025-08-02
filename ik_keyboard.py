@@ -1,14 +1,10 @@
-# python3 ik_hand_tracking.py --path .venv/lib/python3.11/site-packages/mani_skill/assets/robots/g1_humanoid/g1.urdf  --port 8080 --flask-port 5000
+# python3 ik_keyboard.py --path .venv/lib/python3.11/site-packages/mani_skill/assets/robots/g1_humanoid/g1.urdf  --port 8080 --flask-port 5000
 # curl http://localhost:5000/config
 
 import time
 import tyro
 import viser
 import numpy as np
-import cv2
-import multiprocessing
-from queue import Empty
-from typing import Optional
 
 import pyroki as pk
 from viser.extras import ViserUrdf
@@ -20,80 +16,16 @@ from yourdfpy import URDF
 from _solve_ik_with_multiple_targets import solve_ik_with_multiple_targets
 from flask import Flask, jsonify
 import threading
+from pynput import keyboard
 
 
 # Global variables to store robot state
 current_robot_config = None
 actuated_joint_names = None
 
-# Dual hand tracking using MediaPipe
-class DualHandTracker:
-    def __init__(self):
-        import mediapipe as mp
-        self.hand_detector = mp.solutions.hands.Hands(
-            static_image_mode=False,
-            max_num_hands=2,  # Track up to 2 hands
-            min_detection_confidence=0.7,  # Lower for faster detection
-            min_tracking_confidence=0.7,    # Lower for faster tracking
-        )
-        self.mp = mp
-    
-    def detect_hands(self, rgb_image):
-        """Detect both hands and return their positions"""
-        results = self.hand_detector.process(rgb_image)
-        if not results.multi_hand_landmarks:
-            return None, None, None, None
-        
-        left_hand_3d = None
-        left_hand_2d = None
-        right_hand_3d = None
-        right_hand_2d = None
-        
-        # Process each detected hand
-        for i, hand_landmarks in enumerate(results.multi_hand_landmarks):
-            if i < len(results.multi_handedness):
-                handedness = results.multi_handedness[i]
-                hand_type = handedness.classification[0].label
-                
-                # Get wrist position (landmark 0)
-                wrist_3d = results.multi_hand_world_landmarks[i].landmark[0]
-                wrist_2d = hand_landmarks.landmark[0]
-                
-                # Convert to numpy arrays
-                wrist_pos_3d = np.array([wrist_3d.x, wrist_3d.y, wrist_3d.z])
-                wrist_pos_2d = np.array([wrist_2d.x, wrist_2d.y])
-                
-                # Store based on hand type
-                if hand_type == "Left":
-                    left_hand_3d = wrist_pos_3d
-                    left_hand_2d = wrist_pos_2d
-                elif hand_type == "Right":
-                    right_hand_3d = wrist_pos_3d
-                    right_hand_2d = wrist_pos_2d
-        
-        return left_hand_3d, left_hand_2d, right_hand_3d, right_hand_2d
-    
-    def draw_hand_landmarks(self, image, results):
-        """Draw hand landmarks on image"""
-        if results.multi_hand_landmarks:
-            for hand_landmarks in results.multi_hand_landmarks:
-                self.mp.solutions.drawing_utils.draw_landmarks(
-                    image,
-                    hand_landmarks,
-                    self.mp.solutions.hands.HAND_CONNECTIONS
-                )
-        return image
-    
-    def draw_hand_landmarks(self, image, results):
-        """Draw hand landmarks on image"""
-        if results.multi_hand_landmarks:
-            for hand_landmarks in results.multi_hand_landmarks:
-                self.mp.solutions.drawing_utils.draw_landmarks(
-                    image,
-                    hand_landmarks,
-                    self.mp.solutions.hands.HAND_CONNECTIONS
-                )
-        return image
+# Keyboard control variables
+keyboard_step_size = 0.01  # meters per key press
+keyboard_pressed = set()
 
 # Create Flask app
 app = Flask(__name__)
@@ -123,49 +55,106 @@ def run_flask_server(flask_port=5000):
     """Run Flask server in a separate thread"""
     app.run(host='0.0.0.0', port=flask_port, debug=False, use_reloader=False)
 
-def produce_frame(queue: multiprocessing.Queue, camera_path: Optional[str] = None):
-    """Produce camera frames and put them in the queue"""
-    if camera_path is None:
-        cap = cv2.VideoCapture(0)
-    else:
-        cap = cv2.VideoCapture(camera_path)
-    
-    if not cap.isOpened():
-        print(f"Error: Could not open camera at {camera_path or 0}")
-        return
-    
-    # Set camera properties for better performance
-    cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
-    cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
-    cap.set(cv2.CAP_PROP_FPS, 30)
-    cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)  # Minimize buffer size
-    
-    print(f"Camera opened successfully at {camera_path or 0}")
-    print(f"Camera resolution: {cap.get(cv2.CAP_PROP_FRAME_WIDTH)}x{cap.get(cv2.CAP_PROP_FRAME_HEIGHT)}")
-    print(f"Camera FPS: {cap.get(cv2.CAP_PROP_FPS)}")
-    
-    while cap.isOpened():
-        success, image = cap.read()
-        if not success:
-            continue
-        
-        # Flip image horizontally for mirror effect
-        image = cv2.flip(image, 1)
-        
-        # Skip frames if queue is full to maintain real-time performance
-        if not queue.full():
-            queue.put(image)
+def on_key_press(key):
+    """Handle key press events"""
+    global keyboard_pressed
+    try:
+        # Convert pynput key to string representation
+        if hasattr(key, 'char') and key.char:
+            keyboard_pressed.add(key.char)
+        elif hasattr(key, 'name'):
+            keyboard_pressed.add(key.name)
         else:
-            # Clear old frames and put new one
-            try:
-                queue.get_nowait()  # Remove old frame
-                queue.put(image)     # Put new frame
-            except Empty:
-                pass
-    
-    cap.release()
+            # Handle special keys
+            if key == keyboard.Key.up:
+                keyboard_pressed.add('up')
+            elif key == keyboard.Key.down:
+                keyboard_pressed.add('down')
+            elif key == keyboard.Key.left:
+                keyboard_pressed.add('left')
+            elif key == keyboard.Key.right:
+                keyboard_pressed.add('right')
+    except AttributeError:
+        pass
 
-def main(path: str, port: int, flask_port: int = 5000, camera_path: Optional[str] = None) -> None:
+def on_key_release(key):
+    """Handle key release events"""
+    global keyboard_pressed
+    try:
+        # Convert pynput key to string representation
+        if hasattr(key, 'char') and key.char:
+            keyboard_pressed.discard(key.char)
+        elif hasattr(key, 'name'):
+            keyboard_pressed.discard(key.name)
+        else:
+            # Handle special keys
+            if key == keyboard.Key.up:
+                keyboard_pressed.discard('up')
+            elif key == keyboard.Key.down:
+                keyboard_pressed.discard('down')
+            elif key == keyboard.Key.left:
+                keyboard_pressed.discard('left')
+            elif key == keyboard.Key.right:
+                keyboard_pressed.discard('right')
+    except AttributeError:
+        pass
+
+def update_target_positions(ik_target_0, ik_target_1, server):
+    """Update target positions based on keyboard input"""
+    global keyboard_pressed, keyboard_step_size
+    
+    # Track if any position changed
+    position_changed = False
+    new_pos_0 = np.array(ik_target_0.position)
+    new_pos_1 = np.array(ik_target_1.position)
+    
+    # Right hand controls (TFGH + RY for Z-axis)
+    if 'f' in keyboard_pressed:  # Forward (Y+)
+        new_pos_1[1] += keyboard_step_size
+        position_changed = True
+    if 'h' in keyboard_pressed:  # Backward (Y-)
+        new_pos_1[1] -= keyboard_step_size
+        position_changed = True
+    if 'g' in keyboard_pressed:  # Left (X-)
+        new_pos_1[0] -= keyboard_step_size
+        position_changed = True
+    if 't' in keyboard_pressed:  # Right (X+)
+        new_pos_1[0] += keyboard_step_size
+        position_changed = True
+    if 'r' in keyboard_pressed:  # Up (Z+)
+        new_pos_1[2] += keyboard_step_size
+        position_changed = True
+    if 'y' in keyboard_pressed:  # Down (Z-)
+        new_pos_1[2] -= keyboard_step_size
+        position_changed = True
+    
+    # Left hand controls (IJKL + UO for Z-axis)
+    if 'j' in keyboard_pressed:  # Forward (Y+)
+        new_pos_0[1] += keyboard_step_size
+        position_changed = True
+    if 'l' in keyboard_pressed:  # Backward (Y-)
+        new_pos_0[1] -= keyboard_step_size
+        position_changed = True
+    if 'k' in keyboard_pressed:  # Left (X-)
+        new_pos_0[0] -= keyboard_step_size
+        position_changed = True
+    if 'i' in keyboard_pressed:  # Right (X+)
+        new_pos_0[0] += keyboard_step_size
+        position_changed = True
+    if 'u' in keyboard_pressed:  # Up (Z+)
+        new_pos_0[2] += keyboard_step_size
+        position_changed = True
+    if 'o' in keyboard_pressed:  # Down (Z-)
+        new_pos_0[2] -= keyboard_step_size
+        position_changed = True
+    
+    # If any position changed, update the transform controls
+    if position_changed:
+        # Update the transform control positions
+        ik_target_0.position = new_pos_0
+        ik_target_1.position = new_pos_1
+
+def main(path: str, port: int, flask_port: int = 5000) -> None:
     global current_robot_config, actuated_joint_names
     
     urdf = URDF.load(path, load_collision_meshes=True, build_collision_scene_graph=True)
@@ -238,6 +227,41 @@ def main(path: str, port: int, flask_port: int = 5000, camera_path: Optional[str
         urdf_vis.update_cfg(initial_config_array)
         print("Reset to initial pose")
     
+    # Add keyboard step size control
+    step_size_handle = server.gui.add_slider("Keyboard Step Size (m)", 0.001, 0.1, 0.01, 0.01)
+    
+    @step_size_handle.on_update
+    def _(_):
+        global keyboard_step_size
+        keyboard_step_size = step_size_handle.value
+    
+    # Add keyboard controls info
+    server.gui.add_markdown("""
+    ## Keyboard Controls
+    
+    **Right Hand (Red Target):**
+    - T/G: Forward/Backward (Y-axis)
+    - F/H: Left/Right (X-axis)
+    - R/Y: Up/Down (Z-axis)
+    
+    **Left Hand (Blue Target):**
+    - I/K: Forward/Backward (Y-axis)
+    - J/L: Left/Right (X-axis)
+    - U/O: Up/Down (Z-axis)
+    
+    **General:**
+    - Adjust step size using the slider above
+    - Use the transform controls for precise positioning
+    """)
+    
+    # Set up keyboard event listeners
+    listener = keyboard.Listener(on_press=on_key_press, on_release=on_key_release)
+    listener.start()
+    
+    print("Keyboard controls enabled:")
+    print("Right hand: TFGH (XY) + RY (Z)")
+    print("Left hand: IJKL (XY) + UO (Z)")
+    print("Adjust step size with the GUI slider")
     
     # Define upper body joint indices (arms and hands only)
     # Based on the actuated joints list: upper body starts from index 12 (torso_joint) onwards
@@ -256,55 +280,9 @@ def main(path: str, port: int, flask_port: int = 5000, camera_path: Optional[str
     print(f"Robot config available at: http://localhost:{flask_port}/config")
     print(f"Health check available at: http://localhost:{flask_port}/health")
     
-    # Setup dual hand tracking
-    hand_tracker = DualHandTracker()
-    print("Dual hand tracker initialized for both hands")
-    
-    # Setup camera frame queue - smaller size for real-time performance
-    frame_queue = multiprocessing.Queue(maxsize=3)
-    
-    # Start camera producer process
-    camera_process = multiprocessing.Process(
-        target=produce_frame, args=(frame_queue, camera_path), daemon=True
-    )
-    camera_process.start()
-    print(f"Camera process started")
-    
-    # Hand tracking variables
-    left_hand_3d = None
-    left_hand_2d = None
-    right_hand_3d = None
-    right_hand_2d = None
-    
     while True:
-        # Get camera frame and detect hands
-        try:
-            bgr = frame_queue.get(timeout=0.05)  # Shorter timeout for real-time
-            rgb = cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)
-            
-            # Detect both hands
-            left_hand_3d, left_hand_2d, right_hand_3d, right_hand_2d = hand_tracker.detect_hands(rgb)
-            
-            # Draw hand landmarks on image
-            results = hand_tracker.hand_detector.process(rgb)
-            bgr_with_landmarks = hand_tracker.draw_hand_landmarks(bgr, results)
-            
-            # Show hand tracking window
-            cv2.imshow("Dual Hand Tracking", bgr_with_landmarks)
-            if cv2.waitKey(1) & 0xFF == ord('q'):
-                break
-            
-            # Print hand positions if detected
-            if left_hand_3d is not None:
-                print(f"Left hand detected - 3D: {left_hand_3d}, 2D: {left_hand_2d}")
-            if right_hand_3d is not None:
-                print(f"Right hand detected - 3D: {right_hand_3d}, 2D: {right_hand_2d}")
-                
-        except Empty:
-            # Don't print this message constantly - it's normal for real-time processing
-            pass
-        except Exception as e:
-            print(f"Hand tracking error: {e}")
+        # Update target positions based on keyboard input
+        update_target_positions(ik_target_0, ik_target_1, server)
         
         # Solve IK for both targets
         start_time = time.time()
@@ -332,12 +310,7 @@ def main(path: str, port: int, flask_port: int = 5000, camera_path: Optional[str
         elapsed_time = time.time() - start_time
         timing_handle.value = 0.99 * timing_handle.value + 0.01 * (elapsed_time * 1000)
         
-        time.sleep(0.02)  # Faster loop for real-time performance
-    
-    # Cleanup
-    cv2.destroyAllWindows()
-    camera_process.terminate()
-    camera_process.join()
+        time.sleep(0.05)
 
 
 if __name__ == "__main__":

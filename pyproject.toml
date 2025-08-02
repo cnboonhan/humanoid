@@ -7,7 +7,9 @@ requires-python = ">=3.11"
 dependencies = [
     "dex-retargeting>=0.4.6",
     "flask>=3.1.1",
+    "keyboard>=0.13.5",
     "mani-skill>=3.0.0b21",
+    "pynput>=1.8.1",
     "robot-descriptions>=1.20.0",
     "vuer[all]>=0.0.65",
     "yourdfpy>=0.0.58",
