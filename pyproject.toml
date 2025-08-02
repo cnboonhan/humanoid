@@ -6,4 +6,5 @@ readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
     "mani-skill>=3.0.0b21",
+    "vuer[all]>=0.0.65",
 ]
