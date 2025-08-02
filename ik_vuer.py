@@ -70,8 +70,85 @@ def extract_hand_position(hand_data, hand_name):
     # Extract position from the last column of the transform matrix
     position = wrist_matrix[:3, 3]
     
-    print(f"{hand_name.capitalize()} hand position: {position}")
+    # print(f"{hand_name.capitalize()} hand position: {position}")
     return position
+
+def update_hand_joints_based_on_pinch(pinch_state, hand_joint_positions, joint_limits, hand_name, target_positions=None, lerp_factor=0.02):
+    """
+    Update hand joint positions based on pinch state with gradual interpolation.
+    Uses the same logic as ik_keyboard.py for correct hand joint control.
+    """
+    global actuated_joint_names
+    
+    if pinch_state is None or hand_joint_positions is None:
+        return hand_joint_positions
+    
+    # Convert pinch state to gripper value (0 = open, 1 = closed)
+    gripper_value = pinch_state if pinch_state > 0.5 else 0.0
+    
+    # Calculate target positions based on pinch state
+    target_positions = target_positions if target_positions is not None else hand_joint_positions.copy()
+    
+    # Define the hand joints for this specific hand
+    if hand_name == 'left':
+        hand_joint_names = ['left_zero_joint', 'left_one_joint', 'left_two_joint', 'left_three_joint', 'left_four_joint', 'left_five_joint', 'left_six_joint']
+    else:  # right
+        hand_joint_names = ['right_zero_joint', 'right_one_joint', 'right_two_joint', 'right_three_joint', 'right_four_joint', 'right_five_joint', 'right_six_joint']
+    
+    # Calculate target positions for each joint with limited motion ranges
+    for i, joint_name in enumerate(hand_joint_names):
+        if i < len(target_positions):
+            # Get joint limits for this specific joint
+            joint_index = actuated_joint_names.index(joint_name) if joint_name in actuated_joint_names else -1
+            if joint_index >= 0 and joint_index < len(joint_limits):
+                lower, upper = joint_limits[joint_index]
+                lower = lower if lower is not None else -np.pi
+                upper = upper if upper is not None else np.pi
+            else:
+                lower, upper = -np.pi, np.pi
+            
+            # Apply motion limits - restrict to half the joint range for more controlled movement
+            motion_range = upper - lower
+            limited_lower = lower + motion_range * 0.25  # Use 25% from the bottom
+            limited_upper = upper - motion_range * 0.25  # Use 25% from the top (total 50% range)
+            
+            # Calculate target position based on hand and joint type with limited motion and reversed direction
+            if hand_name == 'left':
+                # For thumb joints (zero, one, two), use normal direction (reversed from previous logic)
+                if joint_name in ['left_zero_joint', 'left_one_joint', 'left_two_joint']:
+                    target_positions[i] = limited_lower + gripper_value * (limited_upper - limited_lower)
+                    if target_positions[i] < 0.0:
+                        target_positions[i] = 0.0
+                else:
+                    # For other joints, reverse the direction
+                    reversed_value = 1.0 - gripper_value
+                    target_positions[i] = limited_lower + reversed_value * (limited_upper - limited_lower)
+                    if target_positions[i] > 0.0:
+                        target_positions[i] = 0.0
+            
+            else:  # right hand - reverse pinch direction
+                # For thumb joints (zero, one, two), use reversed direction
+                if joint_name in ['right_zero_joint', 'right_one_joint', 'right_two_joint']:
+                    reversed_value = 1.0 - gripper_value
+                    target_positions[i] = limited_lower + reversed_value * (limited_upper - limited_lower)
+                    if target_positions[i] > 0.0:
+                        target_positions[i] = 0.0
+                else:
+                    # For other joints, use normal direction
+                    target_positions[i] = limited_lower + gripper_value * (limited_upper - limited_lower)
+                    if target_positions[i] < 0.0:
+                        target_positions[i] = 0.0
+            
+    
+    # Gradually interpolate current positions towards target positions with much slower speed
+    updated_positions = hand_joint_positions.copy()
+    for i in range(len(updated_positions)):
+        if i < len(target_positions):
+            # Linear interpolation between current and target position with much slower lerp factor
+            updated_positions[i] = hand_joint_positions[i] + lerp_factor * (target_positions[i] - hand_joint_positions[i])
+    
+    # print(f"{hand_name.capitalize()} hand pinch: {pinch_state:.2f}, gripper_value: {gripper_value:.2f}")
+    return updated_positions, target_positions
 
 @vuer_app.add_handler("HAND_MOVE")
 async def handler(event, session):
@@ -81,8 +158,47 @@ async def handler(event, session):
     hand_data = event.value
     
     if hand_data is not None:
-        global initial_hand_tracking_left_position, initial_hand_tracking_right_position
+        global initial_hand_tracking_left_position, initial_hand_tracking_right_position, left_hand_pinch_state, right_hand_pinch_state, left_hand_joint_positions, right_hand_joint_positions
         
+        # Extract pinch states from hand tracking data
+        try:
+            if 'leftState' in hand_data.keys():
+                left_hand_pinch_state = hand_data['leftState']['pinch']
+                # print(f"Left hand pinch state: {left_hand_pinch_state}")
+                
+                # Update left hand joints based on pinch state
+                if left_hand_joint_positions is not None:
+                    # print(f"Updating left hand joints with pinch state: {left_hand_pinch_state}")
+                    global left_hand_target_positions
+                    left_hand_joint_positions, left_hand_target_positions = update_hand_joints_based_on_pinch(
+                        left_hand_pinch_state, left_hand_joint_positions, left_hand_joint_limits, 'left',
+                        left_hand_target_positions if 'left_hand_target_positions' in globals() else None
+                    )
+                    # Store target positions for gradual updates
+                    left_hand_target_positions = left_hand_target_positions
+                    # print(f"Updated left hand joint positions: {left_hand_joint_positions}")
+        except Exception as e:
+            pass
+        
+        try:
+            if 'rightState' in hand_data.keys():
+                right_hand_pinch_state = hand_data['rightState']['pinch']
+                # print(f"Right hand pinch state: {right_hand_pinch_state}")
+             
+                # Update right hand joints based on pinch state
+                if right_hand_joint_positions is not None:
+                    # print(f"Updating right hand joints with pinch state: {right_hand_pinch_state}")
+                    global right_hand_target_positions
+                    right_hand_joint_positions, right_hand_target_positions = update_hand_joints_based_on_pinch(
+                        right_hand_pinch_state, right_hand_joint_positions, right_hand_joint_limits, 'right',
+                        right_hand_target_positions if 'right_hand_target_positions' in globals() else None
+                    )
+                    # Store target positions for gradual updates
+                    right_hand_target_positions = right_hand_target_positions
+                    # print(f"Updated right hand joint positions: {right_hand_joint_positions}")
+        except Exception as e:
+            pass
+
         if len(hand_data['left']) > 2:
             try:
                 left_value = hand_data['left']
@@ -96,7 +212,7 @@ async def handler(event, session):
                 # Calculate difference from initial position
                 if initial_hand_tracking_left_position is not None and left_position is not None:
                     left_difference = left_position - initial_hand_tracking_left_position
-                    print(f"Left hand difference from initial: {left_difference}")
+                    # print(f"Left hand difference from initial: {left_difference}")
                     
                     # Update IK target 1 (left hand) based on difference from initial hand position
                     global ik_target_1_position, robot_initial_left_hand_position
@@ -108,7 +224,7 @@ async def handler(event, session):
                         # Use original XYZ coordinates without swapping
                         new_target_position = robot_initial_left_hand_position + scaled_difference
                         ik_target_1_position = new_target_position.copy()  # Update global target
-                        print(f"Updated left IK target: initial={robot_initial_left_hand_position}, diff={scaled_difference}, new={new_target_position}")
+                        # print(f"Updated left IK target: initial={robot_initial_left_hand_position}, diff={scaled_difference}, new={new_target_position}")
                     
             except Exception as e:
                 print(f"Error accessing 'left': {e}")
@@ -126,7 +242,7 @@ async def handler(event, session):
                 # Calculate difference from initial position
                 if initial_hand_tracking_right_position is not None and right_position is not None:
                     right_difference = right_position - initial_hand_tracking_right_position
-                    print(f"Right hand difference from initial: {right_difference}")
+                    # print(f"Right hand difference from initial: {right_difference}")
                     
                     # Update IK target 0 (right hand) based on difference from initial hand position
                     global ik_target_0_position, robot_initial_right_hand_position
@@ -138,7 +254,7 @@ async def handler(event, session):
                         # Use original XYZ coordinates without swapping
                         new_target_position = robot_initial_right_hand_position + scaled_difference
                         ik_target_0_position = new_target_position.copy()  # Update global target
-                        print(f"Updated right IK target: initial={robot_initial_right_hand_position}, diff={scaled_difference}, new={new_target_position}")
+                        # print(f"Updated right IK target: initial={robot_initial_right_hand_position}, diff={scaled_difference}, new={new_target_position}")
                     
             except Exception as e:
                 print(f"Error accessing 'right': {e}")
@@ -181,6 +297,18 @@ ik_target_1_position = None
 # Global variables to store robot's initial hand positions (from default joint configuration)
 robot_initial_right_hand_position = None
 robot_initial_left_hand_position = None
+
+# Global variables to store pinch states from hand tracking
+left_hand_pinch_state = None
+right_hand_pinch_state = None
+
+# Global variables to store current hand joint positions for gradual closing
+left_hand_joint_positions = None
+right_hand_joint_positions = None
+
+# Global variables to store hand joint limits
+left_hand_joint_limits = None
+right_hand_joint_limits = None
 
 # Create Flask app
 app = Flask(__name__)
@@ -226,12 +354,23 @@ def get_initial_hand_tracking_positions():
         "timestamp": time.time()
     })
 
+@app.route('/hand_pinch_states', methods=['GET'])
+def get_hand_pinch_states():
+    """Return the current hand pinch states as JSON"""
+    global left_hand_pinch_state, right_hand_pinch_state
+    
+    return jsonify({
+        "left_hand_pinch": left_hand_pinch_state,
+        "right_hand_pinch": right_hand_pinch_state,
+        "timestamp": time.time()
+    })
+
 def run_flask_server(flask_port=5000):
     """Run Flask server in a separate thread"""
     app.run(host='0.0.0.0', port=flask_port, debug=False, use_reloader=False)
 
 def main(path: str, port: int, flask_port: int = 5000) -> None:
-    global current_robot_config, actuated_joint_names, ik_target_0_position, ik_target_1_position
+    global current_robot_config, actuated_joint_names, ik_target_0_position, ik_target_1_position, left_hand_joint_positions, right_hand_joint_positions, left_hand_joint_limits, right_hand_joint_limits
     
     urdf = URDF.load(path, load_collision_meshes=True, build_collision_scene_graph=True)
     
@@ -304,6 +443,54 @@ def main(path: str, port: int, flask_port: int = 5000) -> None:
     print(f"Robot initial hand positions:")
     print(f"  Right hand: {robot_initial_right_hand_position}")
     print(f"  Left hand: {robot_initial_left_hand_position}")
+    
+    # Initialize hand joint positions and limits
+    global left_hand_joint_positions, right_hand_joint_positions, left_hand_joint_limits, right_hand_joint_limits
+    
+    # Get joint limits for hand joints (assuming last few joints are hand joints)
+    joint_limits = list(urdf_vis.get_actuated_joint_limits().values())
+    
+    # Print all joint names to identify hand joints
+    print(f"All actuated joint names: {actuated_joint_names}")
+    print(f"Total joints: {len(actuated_joint_names)}")
+    
+    # Find hand joints by looking for "left_zero_joint" to "left_six_joint" and "right_zero_joint" to "right_six_joint"
+    left_hand_joint_indices = []
+    right_hand_joint_indices = []
+    
+    for i, joint_name in enumerate(actuated_joint_names):
+        if joint_name.startswith('left_') and joint_name.endswith('_joint'):
+            left_hand_joint_indices.append(i)
+            print(f"Found left hand joint: {joint_name} at index {i}")
+        elif joint_name.startswith('right_') and joint_name.endswith('_joint'):
+            right_hand_joint_indices.append(i)
+            print(f"Found right hand joint: {joint_name} at index {i}")
+    
+    # Initialize hand joint positions and limits
+    if len(left_hand_joint_indices) > 0 and len(right_hand_joint_indices) > 0:
+        print(f"Using {len(left_hand_joint_indices)} left hand joints and {len(right_hand_joint_indices)} right hand joints")
+        
+        # Get left hand joint positions and limits
+        left_hand_joint_positions = initial_config_array[left_hand_joint_indices].copy()
+        left_hand_joint_limits = [joint_limits[i] for i in left_hand_joint_indices]
+        
+        # Get right hand joint positions and limits
+        right_hand_joint_positions = initial_config_array[right_hand_joint_indices].copy()
+        right_hand_joint_limits = [joint_limits[i] for i in right_hand_joint_indices]
+    else:
+        # Fallback: assume last 6 joints are hand joints
+        print("No hand joints found by name, using last 6 joints as fallback")
+        hand_joint_count = 6  # 3 joints per hand
+        left_hand_joint_positions = initial_config_array[-hand_joint_count:-hand_joint_count//2].copy()
+        right_hand_joint_positions = initial_config_array[-hand_joint_count//2:].copy()
+        left_hand_joint_limits = joint_limits[-hand_joint_count:-hand_joint_count//2]
+        right_hand_joint_limits = joint_limits[-hand_joint_count//2:]
+    
+    print(f"Initialized hand joint positions:")
+    print(f"  Left hand joints: {left_hand_joint_positions}")
+    print(f"  Right hand joints: {right_hand_joint_positions}")
+    print(f"  Left hand limits: {left_hand_joint_limits}")
+    print(f"  Right hand limits: {right_hand_joint_limits}")
     
     # Add some GUI controls
     timing_handle = server.gui.add_number("Elapsed (ms)", 0.001, disabled=True)
@@ -431,6 +618,35 @@ def main(path: str, port: int, flask_port: int = 5000) -> None:
             # Keep lower body joints at their initial values
             current_config = initial_config_array.copy()
             current_config[upper_body_indices] = solution[upper_body_indices]
+            
+            # Apply hand joint positions based on pinch states
+            if left_hand_joint_positions is not None:
+                print(f"Applying left hand joints: {left_hand_joint_positions}")
+                # Find left hand joint indices
+                left_hand_joint_indices = []
+                for i, joint_name in enumerate(actuated_joint_names):
+                    if joint_name in ['left_zero_joint', 'left_one_joint', 'left_two_joint', 'left_three_joint', 'left_four_joint', 'left_five_joint', 'left_six_joint']:
+                        left_hand_joint_indices.append(i)
+                
+                if len(left_hand_joint_indices) > 0:
+                    # Apply left hand joint positions
+                    for i, pos in zip(left_hand_joint_indices, left_hand_joint_positions):
+                        current_config[i] = pos
+                        print(f"Set left hand joint {i} ({actuated_joint_names[i]}) to {pos}")
+            
+            if right_hand_joint_positions is not None:
+                print(f"Applying right hand joints: {right_hand_joint_positions}")
+                # Find right hand joint indices
+                right_hand_joint_indices = []
+                for i, joint_name in enumerate(actuated_joint_names):
+                    if joint_name in ['right_zero_joint', 'right_one_joint', 'right_two_joint', 'right_three_joint', 'right_four_joint', 'right_five_joint', 'right_six_joint']:
+                        right_hand_joint_indices.append(i)
+                
+                if len(right_hand_joint_indices) > 0:
+                    # Apply right hand joint positions
+                    for i, pos in zip(right_hand_joint_indices, right_hand_joint_positions):
+                        current_config[i] = pos
+                        print(f"Set right hand joint {i} ({actuated_joint_names[i]}) to {pos}")
             
             # Store current configuration globally for Flask API
             current_robot_config = current_config.copy()
