@@ -166,14 +166,14 @@ class HumanoidPlaceAppleInBowl(HumanoidPickPlaceEnv):
         builder.add_multiple_convex_collisions_from_file(
             filename=os.path.join(model_dir, "cardboard_box/textured.obj"),
             pose=fix_rotation_pose,
-            scale=[scale * 0.008] * 3,  # Scale down by 100x to make box much smaller
+            scale=[scale * 0.04] * 3,  # Scale down by 100x to make box much smaller
         )
         builder.add_visual_from_file(
             filename=os.path.join(model_dir, "cardboard_box/textured.obj"),
-            scale=[scale * 0.06] * 3,  # Scale down by 100x to make box much smaller
+            scale=[scale * 0.04] * 3,  # Scale down by 100x to make box much smaller
             pose=fix_rotation_pose,
         )
-        builder.initial_pose = sapien.Pose(p=[0.1, -0.3, 0.78])  # Moved box closer to robot
+        builder.initial_pose = sapien.Pose(p=[0.02, -0.2, 1.5])  # Moved box closer to robot
         self.box = builder.build(name="box")
 
     def evaluate(self):
@@ -298,12 +298,12 @@ class UnitreeG1PlaceAppleInBowlStandaloneEnv(HumanoidPlaceAppleInBowl):
             self.agent.robot.set_pose(self.init_robot_pose)
 
             # Initialize the box to be within reach (slightly to robot's right)
-            xyz = torch.zeros((b, 3))
-            xyz[:, 0] = 0.1 + randomization.uniform(low=-0.025, high=0.025, size=(b, 1))  # Move box slightly to robot's right
-            xyz[:, 1] = -0.2 + randomization.uniform(low=-0.025, high=0.025, size=(b, 1))  # Fixed Y to -0.2
-            qs = randomization.random_quaternions(b, lock_x=True, lock_y=True)
-            xyz[:, 2] = 0.7335
-            self.box.set_pose(Pose.create_from_pq(xyz, qs))
+            # xyz = torch.zeros((b, 3))
+            # xyz[:, 0] = 0.1 + randomization.uniform(low=-0.025, high=0.025, size=(b, 1))  # Move box slightly to robot's right
+            # xyz[:, 1] = -0.2 + randomization.uniform(low=-0.025, high=0.025, size=(b, 1))  # Fixed Y to -0.2
+            # qs = randomization.random_quaternions(b, lock_x=True, lock_y=True)
+            # xyz[:, 2] = 0.7335
+            # self.box.set_pose(Pose.create_from_pq(xyz, qs))
 
             # Initialize the bowl
             xyz = torch.zeros((b, 3))
