@@ -73,6 +73,167 @@ def extract_hand_position(hand_data, hand_name):
     # print(f"{hand_name.capitalize()} hand position: {position}")
     return position
 
+def extract_hand_orientation(hand_data, hand_name):
+    """
+    Extract hand orientation (roll, pitch, yaw) from the hand tracking data.
+    hand_data: Float32Array of 25 * 16 values (25 joints * 16 matrix values)
+    hand_name: 'left' or 'right' for logging
+    
+    Returns: (roll_deg, pitch_deg, yaw_deg) in degrees
+    """
+    if hand_data is None:
+        return None, None, None
+    
+    try:
+        # Convert to numpy array for easier manipulation
+        hand_array = np.array(hand_data)
+        
+        # Each joint has a 4x4 transform matrix (16 values)
+        # The wrist joint is at index 0, which gives us the overall hand orientation
+        wrist_matrix = hand_array[:16].reshape(4, 4)
+        
+        # In column-major order, the translation is in the last column (indices 12, 13, 14)
+        # But numpy reshape creates a row-major matrix, so we need to transpose
+        # to get the correct column-major interpretation
+        wrist_matrix = wrist_matrix.T  # Transpose to get column-major interpretation
+        
+        # Extract rotation matrix (3x3 upper left part)
+        rotation_matrix = wrist_matrix[:3, :3]
+        
+        # Convert rotation matrix to euler angles
+        # Using a simple method to extract roll, pitch, yaw from rotation matrix
+        # This assumes XYZ rotation order
+        
+        # Extract roll (rotation around X-axis)
+        roll = np.arctan2(rotation_matrix[2, 1], rotation_matrix[2, 2])
+        
+        # Extract pitch (rotation around Y-axis)
+        pitch = np.arctan2(-rotation_matrix[2, 0], 
+                          np.sqrt(rotation_matrix[2, 1]**2 + rotation_matrix[2, 2]**2))
+        
+        # Extract yaw (rotation around Z-axis)
+        yaw = np.arctan2(rotation_matrix[1, 0], rotation_matrix[0, 0])
+        
+        # Convert to degrees
+        roll_deg = np.degrees(roll)
+        pitch_deg = np.degrees(pitch)
+        yaw_deg = np.degrees(yaw)
+        
+        print(f"{hand_name.capitalize()} hand orientation: roll={roll_deg:.1f}°, pitch={pitch_deg:.1f}°, yaw={yaw_deg:.1f}°")
+        
+        # Debug: Check for unusual values
+        if abs(roll_deg) > 180 or abs(pitch_deg) > 180 or abs(yaw_deg) > 180:
+            print(f"WARNING: {hand_name} has unusual orientation values!")
+            print(f"Rotation matrix: {rotation_matrix}")
+        
+        return roll_deg, pitch_deg, yaw_deg
+        
+    except Exception as e:
+        print(f"Error extracting {hand_name} hand orientation: {e}")
+        return None, None, None
+
+def apply_orientation_adjustment(position, roll_adjustment, pitch_adjustment, yaw_adjustment, hand_name="hand"):
+    """
+    Apply orientation adjustments to hand position to correct excessive angles.
+    
+    Args:
+        position: Current hand position [x, y, z]
+        roll_adjustment, pitch_adjustment, yaw_adjustment: Adjustment amounts
+        hand_name: Name of the hand for logging
+    
+    Returns:
+        adjusted_position: New position with orientation corrections applied
+    """
+    if position is None:
+        return position
+    
+    # Convert adjustments to radians
+    roll_rad = np.radians(roll_adjustment)
+    pitch_rad = np.radians(pitch_adjustment)
+    yaw_rad = np.radians(yaw_adjustment)
+    
+    # Apply small position adjustments based on orientation corrections
+    # Roll affects Y and Z
+    # Pitch affects X and Z  
+    # Yaw affects X and Y
+    adjusted_position = position.copy()
+    
+    # Apply roll adjustment (rotation around X-axis)
+    if abs(roll_adjustment) > 0.001:
+        adjusted_position[1] += roll_rad * 0.1  # Small Y adjustment
+        adjusted_position[2] += roll_rad * 0.1  # Small Z adjustment
+    
+    # Apply pitch adjustment (rotation around Y-axis)
+    if abs(pitch_adjustment) > 0.001:
+        # adjusted_position[0] += pitch_rad * 0.1  # Small X adjustment
+        adjusted_position[2] += pitch_rad * 0.1  # Small Z adjustment
+    
+    # Apply yaw adjustment (rotation around Z-axis)
+    if abs(yaw_adjustment) > 0.001:
+        adjusted_position[0] += yaw_rad * 0.1  # Small X adjustment
+        adjusted_position[1] += yaw_rad * 0.1  # Small Y adjustment
+    
+    # print(f"{hand_name} position adjusted: {position} -> {adjusted_position}")
+    return adjusted_position
+
+def update_palm_orientation(current_roll, current_pitch, current_yaw, roll_adjustment, pitch_adjustment, yaw_adjustment, hand_name="hand"):
+    """
+    Update palm orientation based on adjustments.
+    
+    Args:
+        current_roll, current_pitch, current_yaw: Current orientation angles in degrees
+        roll_adjustment, pitch_adjustment, yaw_adjustment: Adjustment amounts in degrees
+        hand_name: Name of the hand for logging
+    
+    Returns:
+        (new_roll, new_pitch, new_yaw): Updated orientation angles
+    """
+    new_roll = current_roll + roll_adjustment
+    new_pitch = current_pitch + pitch_adjustment
+    new_yaw = current_yaw + yaw_adjustment
+    
+    # Keep angles within reasonable bounds (-180 to 180 degrees)
+    new_roll = ((new_roll + 180) % 360) - 180
+    new_pitch = ((new_pitch + 180) % 360) - 180
+    new_yaw = ((new_yaw + 180) % 360) - 180
+    
+    if abs(roll_adjustment) > 0.001 or abs(pitch_adjustment) > 0.001 or abs(yaw_adjustment) > 0.001:
+        print(f"{hand_name} orientation updated: roll={current_roll:.1f}° -> {new_roll:.1f}°, pitch={current_pitch:.1f}° -> {new_pitch:.1f}°, yaw={current_yaw:.1f}° -> {new_yaw:.1f}°")
+    
+    return new_roll, new_pitch, new_yaw
+
+def detect_and_adjust_excessive_orientation(roll_deg, pitch_deg, yaw_deg, hand_name="hand", threshold=30.0, adjustment_amount=2.0):
+    """
+    Detect if hand orientation exceeds threshold and return constant adjustment amounts.
+    
+    Args:
+        roll_deg, pitch_deg, yaw_deg: Current orientation angles in degrees
+        hand_name: Name of the hand for logging
+        threshold: Threshold angle in degrees (default 45.0)
+        adjustment_amount: Constant adjustment amount in degrees (default 2.0)
+    
+    Returns:
+        (roll_adjustment, pitch_adjustment, yaw_adjustment): Adjustment amounts
+    """
+    roll_adjustment = 0.0
+    pitch_adjustment = 0.0
+    yaw_adjustment = 0.0
+    
+    # Check if any angle exceeds the threshold
+    if abs(roll_deg) > threshold:
+        roll_adjustment = -np.sign(roll_deg) * adjustment_amount  # Move towards zero
+        print(f"{hand_name} roll exceeded {threshold}° ({roll_deg:.1f}°), applying adjustment: {roll_adjustment:.1f}°")
+    
+    if abs(pitch_deg) > threshold:
+        pitch_adjustment = -np.sign(pitch_deg) * adjustment_amount  # Move towards zero
+        print(f"{hand_name} pitch exceeded {threshold}° ({pitch_deg:.1f}°), applying adjustment: {pitch_adjustment:.1f}°")
+    
+    if abs(yaw_deg) > threshold:
+        yaw_adjustment = -np.sign(yaw_deg) * adjustment_amount  # Move towards zero
+        print(f"{hand_name} yaw exceeded {threshold}° ({yaw_deg:.1f}°), applying adjustment: {yaw_adjustment:.1f}°")
+    
+    return roll_adjustment, pitch_adjustment, yaw_adjustment
+
 def update_hand_joints_based_on_pinch(pinch_state, hand_joint_positions, joint_limits, hand_name, target_positions=None, lerp_factor=0.02):
     """
     Update hand joint positions based on pinch state with gradual interpolation.
@@ -158,7 +319,7 @@ async def handler(event, session):
     hand_data = event.value
     
     if hand_data is not None:
-        global initial_hand_tracking_left_position, initial_hand_tracking_right_position, left_hand_pinch_state, right_hand_pinch_state, left_hand_joint_positions, right_hand_joint_positions
+        global initial_hand_tracking_left_position, initial_hand_tracking_right_position, initial_hand_tracking_left_orientation, initial_hand_tracking_right_orientation, left_hand_pinch_state, right_hand_pinch_state, left_hand_joint_positions, right_hand_joint_positions
         
         # Extract pinch states from hand tracking data
         try:
@@ -204,10 +365,43 @@ async def handler(event, session):
                 left_value = hand_data['left']
                 left_position = extract_hand_position(left_value, 'left')
                 
-                # Capture initial left hand position if not already captured
+                # Extract left hand orientation
+                left_roll, left_pitch, left_yaw = extract_hand_orientation(left_value, 'left')
+                
+                # Capture initial left hand position and orientation if not already captured
                 if initial_hand_tracking_left_position is None and left_position is not None:
                     initial_hand_tracking_left_position = left_position.copy()
                     # print(f"Initial left hand position captured: {initial_hand_tracking_left_position}")
+                
+                if initial_hand_tracking_left_orientation is None and left_roll is not None:
+                    initial_hand_tracking_left_orientation = np.array([left_roll, left_pitch, left_yaw])
+                    print(f"Initial left hand orientation captured: roll={left_roll:.1f}°, pitch={left_pitch:.1f}°, yaw={left_yaw:.1f}°")
+                
+                # Calculate and print orientation delta if initial orientation is captured
+                if initial_hand_tracking_left_orientation is not None and left_roll is not None:
+                    current_orientation = np.array([left_roll, left_pitch, left_yaw])
+                    orientation_delta = current_orientation - initial_hand_tracking_left_orientation
+                    print(f"Left hand - Current: roll={left_roll:.1f}°, pitch={left_pitch:.1f}°, yaw={left_yaw:.1f}°")
+                    print(f"Left hand - Initial: roll={initial_hand_tracking_left_orientation[0]:.1f}°, pitch={initial_hand_tracking_left_orientation[1]:.1f}°, yaw={initial_hand_tracking_left_orientation[2]:.1f}°")
+                    print(f"Left hand orientation delta: roll={orientation_delta[0]:+.1f}°, pitch={orientation_delta[1]:+.1f}°, yaw={orientation_delta[2]:+.1f}°")
+                
+                # Check for excessive orientation and apply adjustments
+                if left_roll is not None:
+                    left_roll_adj, left_pitch_adj, left_yaw_adj = detect_and_adjust_excessive_orientation(
+                        left_roll, left_pitch, left_yaw, "Left hand", 30.0, 2.0
+                    )
+                    
+                    # Update palm orientation if adjustments are needed
+                    if abs(left_roll_adj) > 0.001 or abs(left_pitch_adj) > 0.001 or abs(left_yaw_adj) > 0.001:
+                        global current_left_palm_orientation
+                        if current_left_palm_orientation is None:
+                            current_left_palm_orientation = np.array([left_roll, left_pitch, left_yaw])
+                        
+                        new_roll, new_pitch, new_yaw = update_palm_orientation(
+                            current_left_palm_orientation[0], current_left_palm_orientation[1], current_left_palm_orientation[2],
+                            left_roll_adj, left_pitch_adj, left_yaw_adj, "Left hand"
+                        )
+                        current_left_palm_orientation = np.array([new_roll, new_pitch, new_yaw])
                 
                 # Calculate difference from initial position
                 if initial_hand_tracking_left_position is not None and left_position is not None:
@@ -223,6 +417,13 @@ async def handler(event, session):
                         
                         # Use original XYZ coordinates without swapping
                         new_target_position = robot_initial_left_hand_position + scaled_difference
+                        
+                        # Apply orientation adjustments if needed
+                        if left_roll is not None and (abs(left_roll_adj) > 0.001 or abs(left_pitch_adj) > 0.001 or abs(left_yaw_adj) > 0.001):
+                            new_target_position = apply_orientation_adjustment(
+                                new_target_position, left_roll_adj, left_pitch_adj, left_yaw_adj, "Left hand"
+                            )
+                        
                         ik_target_1_position = new_target_position.copy()  # Update global target
                         # print(f"Updated left IK target: initial={robot_initial_left_hand_position}, diff={scaled_difference}, new={new_target_position}")
                     
@@ -234,10 +435,43 @@ async def handler(event, session):
                 right_value = hand_data['right']
                 right_position = extract_hand_position(right_value, 'right')
                 
-                # Capture initial right hand position if not already captured
+                # Extract right hand orientation
+                right_roll, right_pitch, right_yaw = extract_hand_orientation(right_value, 'right')
+                
+                # Capture initial right hand position and orientation if not already captured
                 if initial_hand_tracking_right_position is None and right_position is not None:
                     initial_hand_tracking_right_position = right_position.copy()
                     # print(f"Initial right hand position captured: {initial_hand_tracking_right_position}")
+                
+                if initial_hand_tracking_right_orientation is None and right_roll is not None:
+                    initial_hand_tracking_right_orientation = np.array([right_roll, right_pitch, right_yaw])
+                    print(f"Initial right hand orientation captured: roll={right_roll:.1f}°, pitch={right_pitch:.1f}°, yaw={right_yaw:.1f}°")
+                
+                # Calculate and print orientation delta if initial orientation is captured
+                if initial_hand_tracking_right_orientation is not None and right_roll is not None:
+                    current_orientation = np.array([right_roll, right_pitch, right_yaw])
+                    orientation_delta = current_orientation - initial_hand_tracking_right_orientation
+                    print(f"Right hand - Current: roll={right_roll:.1f}°, pitch={right_pitch:.1f}°, yaw={right_yaw:.1f}°")
+                    print(f"Right hand - Initial: roll={initial_hand_tracking_right_orientation[0]:.1f}°, pitch={initial_hand_tracking_right_orientation[1]:.1f}°, yaw={initial_hand_tracking_right_orientation[2]:.1f}°")
+                    print(f"Right hand orientation delta: roll={orientation_delta[0]:+.1f}°, pitch={orientation_delta[1]:+.1f}°, yaw={orientation_delta[2]:+.1f}°")
+                
+                # Check for excessive orientation and apply adjustments
+                if right_roll is not None:
+                    right_roll_adj, right_pitch_adj, right_yaw_adj = detect_and_adjust_excessive_orientation(
+                        right_roll, right_pitch, right_yaw, "Right hand", 30.0, 2.0
+                    )
+                    
+                    # Update palm orientation if adjustments are needed
+                    if abs(right_roll_adj) > 0.001 or abs(right_pitch_adj) > 0.001 or abs(right_yaw_adj) > 0.001:
+                        global current_right_palm_orientation
+                        if current_right_palm_orientation is None:
+                            current_right_palm_orientation = np.array([right_roll, right_pitch, right_yaw])
+                        
+                        new_roll, new_pitch, new_yaw = update_palm_orientation(
+                            current_right_palm_orientation[0], current_right_palm_orientation[1], current_right_palm_orientation[2],
+                            right_roll_adj, right_pitch_adj, right_yaw_adj, "Right hand"
+                        )
+                        current_right_palm_orientation = np.array([new_roll, new_pitch, new_yaw])
                 
                 # Calculate difference from initial position
                 if initial_hand_tracking_right_position is not None and right_position is not None:
@@ -253,6 +487,13 @@ async def handler(event, session):
                         
                         # Use original XYZ coordinates without swapping
                         new_target_position = robot_initial_right_hand_position + scaled_difference
+                        
+                        # Apply orientation adjustments if needed
+                        if right_roll is not None and (abs(right_roll_adj) > 0.001 or abs(right_pitch_adj) > 0.001 or abs(right_yaw_adj) > 0.001):
+                            new_target_position = apply_orientation_adjustment(
+                                new_target_position, right_roll_adj, right_pitch_adj, right_yaw_adj, "Right hand"
+                            )
+                        
                         ik_target_0_position = new_target_position.copy()  # Update global target
                         # print(f"Updated right IK target: initial={robot_initial_right_hand_position}, diff={scaled_difference}, new={new_target_position}")
                     
@@ -289,6 +530,14 @@ actuated_joint_names = None
 # Global variables to store initial hand positions from hand tracking
 initial_hand_tracking_left_position = None
 initial_hand_tracking_right_position = None
+
+# Global variables to store initial hand orientations from hand tracking
+initial_hand_tracking_left_orientation = None
+initial_hand_tracking_right_orientation = None
+
+# Global variables to store current palm orientations for IK targets
+current_left_palm_orientation = None
+current_right_palm_orientation = None
 
 # Global variables to store IK targets for hand tracking control
 ik_target_0_position = None
@@ -351,6 +600,17 @@ def get_initial_hand_tracking_positions():
     return jsonify({
         "left_hand": initial_hand_tracking_left_position.tolist() if initial_hand_tracking_left_position is not None else None,
         "right_hand": initial_hand_tracking_right_position.tolist() if initial_hand_tracking_right_position is not None else None,
+        "timestamp": time.time()
+    })
+
+@app.route('/initial_hand_tracking_orientations', methods=['GET'])
+def get_initial_hand_tracking_orientations():
+    """Return the initial hand tracking orientations as JSON"""
+    global initial_hand_tracking_left_orientation, initial_hand_tracking_right_orientation
+    
+    return jsonify({
+        "left_hand": initial_hand_tracking_left_orientation.tolist() if initial_hand_tracking_left_orientation is not None else None,
+        "right_hand": initial_hand_tracking_right_orientation.tolist() if initial_hand_tracking_right_orientation is not None else None,
         "timestamp": time.time()
     })
 
@@ -607,11 +867,58 @@ def main(path: str, port: int, flask_port: int = 5000) -> None:
             ik_target_1.position = left_target_pos
         
         try:
+            # Use updated palm orientations if available, otherwise use default
+            right_wxyz = ik_target_0.wxyz
+            left_wxyz = ik_target_1.wxyz
+            
+            # Convert palm orientations to quaternions if available
+            if current_right_palm_orientation is not None:
+                # Convert euler angles to quaternion (simplified conversion)
+                right_roll_rad = np.radians(current_right_palm_orientation[0])
+                right_pitch_rad = np.radians(current_right_palm_orientation[1])
+                right_yaw_rad = np.radians(current_right_palm_orientation[2])
+                
+                # Simple quaternion from euler angles (not perfect but functional)
+                cy = np.cos(right_yaw_rad * 0.5)
+                sy = np.sin(right_yaw_rad * 0.5)
+                cp = np.cos(right_pitch_rad * 0.5)
+                sp = np.sin(right_pitch_rad * 0.5)
+                cr = np.cos(right_roll_rad * 0.5)
+                sr = np.sin(right_roll_rad * 0.5)
+                
+                right_wxyz = np.array([
+                    cr * cp * cy + sr * sp * sy,
+                    sr * cp * cy - cr * sp * sy,
+                    cr * sp * cy + sr * cp * sy,
+                    cr * cp * sy - sr * sp * cy
+                ])
+            
+            if current_left_palm_orientation is not None:
+                # Convert euler angles to quaternion (simplified conversion)
+                left_roll_rad = np.radians(current_left_palm_orientation[0])
+                left_pitch_rad = np.radians(current_left_palm_orientation[1])
+                left_yaw_rad = np.radians(current_left_palm_orientation[2])
+                
+                # Simple quaternion from euler angles (not perfect but functional)
+                cy = np.cos(left_yaw_rad * 0.5)
+                sy = np.sin(left_yaw_rad * 0.5)
+                cp = np.cos(left_pitch_rad * 0.5)
+                sp = np.sin(left_pitch_rad * 0.5)
+                cr = np.cos(left_roll_rad * 0.5)
+                sr = np.sin(left_roll_rad * 0.5)
+                
+                left_wxyz = np.array([
+                    cr * cp * cy + sr * sp * sy,
+                    sr * cp * cy - cr * sp * sy,
+                    cr * sp * cy + sr * cp * sy,
+                    cr * cp * sy - sr * sp * cy
+                ])
+            
             solution = solve_ik_with_multiple_targets(
                 robot=robot,
                 target_link_names=target_link_names,
                 target_positions=np.array([right_target_pos, left_target_pos]),
-                target_wxyzs=np.array([ik_target_0.wxyz, ik_target_1.wxyz]),
+                target_wxyzs=np.array([right_wxyz, left_wxyz]),
             )
             
             # Create a new configuration that only updates upper body joints
