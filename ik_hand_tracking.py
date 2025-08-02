@@ -26,41 +26,63 @@ import threading
 current_robot_config = None
 actuated_joint_names = None
 
-# Simple hand tracking using MediaPipe
-class SimpleHandTracker:
-    def __init__(self, hand_type="Right"):
+# Dual hand tracking using MediaPipe
+class DualHandTracker:
+    def __init__(self):
         import mediapipe as mp
         self.hand_detector = mp.solutions.hands.Hands(
             static_image_mode=False,
-            max_num_hands=1,
+            max_num_hands=2,  # Track up to 2 hands
             min_detection_confidence=0.7,  # Lower for faster detection
             min_tracking_confidence=0.7,    # Lower for faster tracking
         )
-        self.hand_type = hand_type
         self.mp = mp
     
-    def detect_hand_position(self, rgb_image):
-        """Detect hand position and return wrist position in 3D"""
+    def detect_hands(self, rgb_image):
+        """Detect both hands and return their positions"""
         results = self.hand_detector.process(rgb_image)
         if not results.multi_hand_landmarks:
-            return None, None
+            return None, None, None, None
         
-        # Find the correct hand type
+        left_hand_3d = None
+        left_hand_2d = None
+        right_hand_3d = None
+        right_hand_2d = None
+        
+        # Process each detected hand
         for i, hand_landmarks in enumerate(results.multi_hand_landmarks):
             if i < len(results.multi_handedness):
                 handedness = results.multi_handedness[i]
-                if handedness.classification[0].label == self.hand_type:
-                    # Get wrist position (landmark 0)
-                    wrist_3d = results.multi_hand_world_landmarks[i].landmark[0]
-                    wrist_2d = hand_landmarks.landmark[0]
-                    
-                    # Convert to numpy arrays
-                    wrist_pos_3d = np.array([wrist_3d.x, wrist_3d.y, wrist_3d.z])
-                    wrist_pos_2d = np.array([wrist_2d.x, wrist_2d.y])
-                    
-                    return wrist_pos_3d, wrist_pos_2d
+                hand_type = handedness.classification[0].label
+                
+                # Get wrist position (landmark 0)
+                wrist_3d = results.multi_hand_world_landmarks[i].landmark[0]
+                wrist_2d = hand_landmarks.landmark[0]
+                
+                # Convert to numpy arrays
+                wrist_pos_3d = np.array([wrist_3d.x, wrist_3d.y, wrist_3d.z])
+                wrist_pos_2d = np.array([wrist_2d.x, wrist_2d.y])
+                
+                # Store based on hand type
+                if hand_type == "Left":
+                    left_hand_3d = wrist_pos_3d
+                    left_hand_2d = wrist_pos_2d
+                elif hand_type == "Right":
+                    right_hand_3d = wrist_pos_3d
+                    right_hand_2d = wrist_pos_2d
         
-        return None, None
+        return left_hand_3d, left_hand_2d, right_hand_3d, right_hand_2d
+    
+    def draw_hand_landmarks(self, image, results):
+        """Draw hand landmarks on image"""
+        if results.multi_hand_landmarks:
+            for hand_landmarks in results.multi_hand_landmarks:
+                self.mp.solutions.drawing_utils.draw_landmarks(
+                    image,
+                    hand_landmarks,
+                    self.mp.solutions.hands.HAND_CONNECTIONS
+                )
+        return image
     
     def draw_hand_landmarks(self, image, results):
         """Draw hand landmarks on image"""
@@ -143,7 +165,7 @@ def produce_frame(queue: multiprocessing.Queue, camera_path: Optional[str] = Non
     
     cap.release()
 
-def main(path: str, port: int, flask_port: int = 5000, camera_path: Optional[str] = None, hand_type: str = "Right") -> None:
+def main(path: str, port: int, flask_port: int = 5000, camera_path: Optional[str] = None) -> None:
     global current_robot_config, actuated_joint_names
     
     urdf = URDF.load(path, load_collision_meshes=True, build_collision_scene_graph=True)
@@ -234,9 +256,9 @@ def main(path: str, port: int, flask_port: int = 5000, camera_path: Optional[str
     print(f"Robot config available at: http://localhost:{flask_port}/config")
     print(f"Health check available at: http://localhost:{flask_port}/health")
     
-    # Setup hand tracking
-    hand_tracker = SimpleHandTracker(hand_type=hand_type)
-    print(f"Hand tracker initialized for {hand_type} hand")
+    # Setup dual hand tracking
+    hand_tracker = DualHandTracker()
+    print("Dual hand tracker initialized for both hands")
     
     # Setup camera frame queue - smaller size for real-time performance
     frame_queue = multiprocessing.Queue(maxsize=3)
@@ -249,30 +271,34 @@ def main(path: str, port: int, flask_port: int = 5000, camera_path: Optional[str
     print(f"Camera process started")
     
     # Hand tracking variables
-    hand_pos_3d = None
-    hand_pos_2d = None
+    left_hand_3d = None
+    left_hand_2d = None
+    right_hand_3d = None
+    right_hand_2d = None
     
     while True:
-        # Get camera frame and detect hand
+        # Get camera frame and detect hands
         try:
             bgr = frame_queue.get(timeout=0.05)  # Shorter timeout for real-time
             rgb = cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)
             
-            # Detect hand position
-            hand_pos_3d, hand_pos_2d = hand_tracker.detect_hand_position(rgb)
+            # Detect both hands
+            left_hand_3d, left_hand_2d, right_hand_3d, right_hand_2d = hand_tracker.detect_hands(rgb)
             
             # Draw hand landmarks on image
             results = hand_tracker.hand_detector.process(rgb)
             bgr_with_landmarks = hand_tracker.draw_hand_landmarks(bgr, results)
             
             # Show hand tracking window
-            cv2.imshow("Hand Tracking", bgr_with_landmarks)
+            cv2.imshow("Dual Hand Tracking", bgr_with_landmarks)
             if cv2.waitKey(1) & 0xFF == ord('q'):
                 break
             
-            # Print hand position if detected (less frequent for performance)
-            if hand_pos_3d is not None:
-                print(f"Hand detected - 3D: {hand_pos_3d}, 2D: {hand_pos_2d}")
+            # Print hand positions if detected
+            if left_hand_3d is not None:
+                print(f"Left hand detected - 3D: {left_hand_3d}, 2D: {left_hand_2d}")
+            if right_hand_3d is not None:
+                print(f"Right hand detected - 3D: {right_hand_3d}, 2D: {right_hand_2d}")
                 
         except Empty:
             # Don't print this message constantly - it's normal for real-time processing
