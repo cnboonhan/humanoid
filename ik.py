@@ -1,4 +1,5 @@
-# python3 ik.py --path .venv/lib/python3.11/site-packages/mani_skill/assets/robots/g1_humanoid/g1.urdf  --port 8080
+# python3 ik.py --path .venv/lib/python3.11/site-packages/mani_skill/assets/robots/g1_humanoid/g1.urdf  --port 8080 --flask-port 5000
+# curl http://localhost:5000/config
 
 import time
 import tyro

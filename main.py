@@ -1,11 +1,8 @@
-#!/usr/bin/env python3
-"""
-Standalone UnitreeG1PlaceAppleInBowl-v1 task implementation
-Based on ManiSkill custom task tutorial
-"""
-
 import copy
 import os
+import time
+import requests
+import json
 from typing import Any, Dict, Union
 
 import numpy as np
@@ -24,6 +21,34 @@ from mani_skill.utils.registration import register_env
 from mani_skill.utils.scene_builder.kitchen_counter import KitchenCounterSceneBuilder
 from mani_skill.utils.structs.pose import Pose
 from mani_skill.utils.structs.types import GPUMemoryConfig, SceneConfig, SimConfig
+
+
+def get_ik_joint_angles(robot, flask_port=5000):
+    """Get joint angles from the running ik.py Flask server"""
+    try:
+        response = requests.get(f"http://localhost:{flask_port}/config", timeout=1.0)
+        if response.status_code == 200:
+            data = response.json()
+            joint_config = data.get("joint_config", {})
+            
+            # For the upper body robot, we need to map the joint names correctly
+            # The robot has 25 joints, so we'll map the upper body joints
+            upper_body_joint_names = [joint.name for joint in robot.active_joints]
+            
+            joint_angles = []
+            for joint_name in upper_body_joint_names:
+                if joint_name in joint_config:
+                    joint_angles.append(joint_config[joint_name])
+                else:
+                    joint_angles.append(0.0)  # Default value if joint not found
+            
+            return np.array(joint_angles, dtype=np.float32)
+        else:
+            print(f"Warning: Flask server returned status {response.status_code}")
+            return None
+    except requests.exceptions.RequestException as e:
+        print(f"Warning: Could not connect to Flask server: {e}")
+        return None
 
 
 class HumanoidPickPlaceEnv(BaseEnv):
@@ -236,25 +261,6 @@ class HumanoidPlaceAppleInBowl(HumanoidPickPlaceEnv):
 
 @register_env("UnitreeG1PlaceAppleInBowlStandalone-v1", max_episode_steps=100)
 class UnitreeG1PlaceAppleInBowlStandaloneEnv(HumanoidPlaceAppleInBowl):
-    """
-    **Task Description:**
-    Control the humanoid unitree G1 robot to grab an apple with its right arm and place it in a bowl to the side
-
-    **Randomizations:**
-    - the bowl's xy position is randomized on top of a table in the region [0.025, 0.025] x [-0.025, -0.025]. It is placed flat on the table
-    - the apple's xy position is randomized on top of a table in the region [0.025, 0.025] x [-0.025, -0.025]. It is placed flat on the table
-    - the apple's z-axis rotation is randomized to a random angle
-
-    **Success Conditions:**
-    - the apple position is within 0.05m euclidean distance of the bowl's position.
-    - the robot's right hand is kept outside the bowl and is above it by at least 0.125m.
-
-    **Goal Specification:**
-    - The bowl's 3D position
-    """
-
-    _sample_video_link = "https://github.com/haosulab/ManiSkill/raw/main/figures/environment_demos/UnitreeG1PlaceAppleInBowl-v1_rt.mp4"
-
     SUPPORTED_ROBOTS = ["unitree_g1_simplified_upper_body_with_head_camera"]
     agent: UnitreeG1UpperBodyWithHeadCamera
     kitchen_scene_scale = 0.82
@@ -305,60 +311,6 @@ class UnitreeG1PlaceAppleInBowlStandaloneEnv(HumanoidPlaceAppleInBowl):
             xyz[:, 2] = 0.753
             self.bowl.set_pose(Pose.create_from_pq(xyz))
 
-
-def test_environment():
-    """Test the environment to ensure it works correctly"""
-    import mani_skill
-    from mani_skill.utils.registration import make
-    
-    print("Testing UnitreeG1PlaceAppleInBowlStandalone-v1 environment...")
-    
-    try:
-        # Create the environment with human render mode
-        env = make("UnitreeG1PlaceAppleInBowlStandalone-v1", 
-                   control_mode="pd_joint_delta_pos", 
-                   obs_mode="rgbd", 
-                   reward_mode="dense",
-                   render_mode="human",
-                   max_episode_steps=100)
-        
-        print("✓ Environment created successfully!")
-        print(f"  Action space: {env.action_space}")
-        print(f"  Observation space: {env.observation_space}")
-        
-        # Reset the environment
-        obs, info = env.reset()
-        print(f"✓ Environment reset successfully!")
-        print(f"  Initial observation keys: {list(obs.keys())}")
-        
-        print("Starting interactive visualization...")
-        print("Press 'q' to quit, or let the episode run for 100 steps")
-        
-        # Interactive visualization loop
-        for step in range(100):
-            # Render the environment
-            env.render()
-            
-            # Take a random action
-            action = env.action_space.sample()
-            obs, reward, terminated, truncated, info = env.step(action)
-            
-            if step % 10 == 0:  # Print every 10 steps
-                print(f"  Step {step}: Reward = {reward}, Terminated = {terminated}")
-            
-            if terminated or truncated:
-                print(f"Episode ended at step {step}")
-                break
-        
-        env.close()
-        print("✓ Test completed successfully!")
-        
-    except Exception as e:
-        print(f"✗ Error during testing: {e}")
-        import traceback
-        traceback.print_exc()
-
-
 def test_environment_headless():
     """Test the environment without visualization for faster testing"""
     import mani_skill
@@ -369,29 +321,33 @@ def test_environment_headless():
     try:
         # Create the environment without render mode
         env = make("UnitreeG1PlaceAppleInBowlStandalone-v1", 
-                   control_mode="pd_joint_delta_pos", 
+                   control_mode="pd_joint_pos", 
                    obs_mode="rgbd", 
                    reward_mode="dense",
                    max_episode_steps=100)
         
         print("✓ Environment created successfully!")
-        print(f"  Action space: {env.action_space}")
-        print(f"  Observation space: {env.observation_space}")
-        
-        # Reset the environment
         obs, info = env.reset()
-        print(f"✓ Environment reset successfully!")
-        print(f"  Initial observation keys: {list(obs.keys())}")
         
-        # Take a few random actions
-        for step in range(5):
-            action = env.action_space.sample()
+        for step in range(100):
+            # Get joint angles from IK server
+            joint_angles = get_ik_joint_angles(env.agent.robot)
+            if joint_angles is not None:
+                # Use joint angles directly as absolute positions
+                action = joint_angles
+                print(f"  Step {step + 1}: Using IK angles, action norm = {np.linalg.norm(action):.4f}")
+            else:
+                # Fallback to random action if IK server not available
+                action = env.action_space.sample()
+                print(f"  Step {step + 1}: Using random action (IK server not available)")
+            
             obs, reward, terminated, truncated, info = env.step(action)
             print(f"  Step {step + 1}: Reward = {reward}, Terminated = {terminated}")
             
             if terminated or truncated:
                 break
         
+        time.sleep(0.05)
         env.close()
         print("✓ Test completed successfully!")
         
@@ -416,24 +372,30 @@ def run_interactive_environment():
     try:
         # Create the environment with human render mode
         env = make("UnitreeG1PlaceAppleInBowlStandalone-v1", 
-                   control_mode="pd_joint_delta_pos", 
+                   control_mode="pd_joint_pos", 
                    obs_mode="rgbd", 
                    reward_mode="dense",
                    render_mode="human",
-                   max_episode_steps=100)
+                   max_episode_steps=7200)
         
         # Reset the environment
         obs, info = env.reset()
         
-        # Interactive loop
         paused = False
         step = 0
         
-        while step < 100:
+        while step < 7200:
             if not paused:
-                # Take a random action
-                action = env.action_space.sample()
-                obs, reward, terminated, truncated, info = env.step(action)
+                # Get joint angles from IK server
+                joint_angles = get_ik_joint_angles(env.agent.robot)
+                if joint_angles is not None:
+                    # Use joint angles directly as absolute positions
+                    print(joint_angles)
+                    action = joint_angles 
+                    obs, reward, terminated, truncated, info = env.step(action)
+                else:
+                    print("IK Server down.")
+                    pass
                 
                 if step % 10 == 0:
                     print(f"Step {step}: Reward = {reward}, Success = {info.get('success', False)}")
@@ -466,13 +428,6 @@ if __name__ == "__main__":
         mode = sys.argv[1]
         if mode == "headless":
             test_environment_headless()
-        elif mode == "interactive":
-            run_interactive_environment()
-        else:
-            print("Usage: python main.py [headless|interactive]")
-            print("  headless: Run without visualization (faster)")
-            print("  interactive: Run with visualization and manual control")
-            print("  (no args): Run with visualization and random actions")
     else:
-        test_environment()
+        run_interactive_environment()
 
