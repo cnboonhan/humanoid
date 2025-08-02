@@ -13,9 +13,45 @@ import jaxlie
 import jaxls
 from yourdfpy import URDF
 from _solve_ik_with_multiple_targets import solve_ik_with_multiple_targets
+from flask import Flask, jsonify
+import threading
 
 
-def main(path: str, port: int) -> None:
+# Global variables to store robot state
+current_robot_config = None
+actuated_joint_names = None
+
+# Create Flask app
+app = Flask(__name__)
+
+@app.route('/config', methods=['GET'])
+def get_robot_config():
+    """Return the current robot configuration as JSON"""
+    global current_robot_config, actuated_joint_names
+    
+    if current_robot_config is None or actuated_joint_names is None:
+        return jsonify({"error": "Robot not initialized"}), 500
+    
+    # Create a dictionary mapping joint names to their current values
+    config_dict = {
+        "joint_config": dict(zip(actuated_joint_names, current_robot_config.tolist())),
+        "timestamp": time.time()
+    }
+    
+    return jsonify(config_dict)
+
+@app.route('/health', methods=['GET'])
+def health_check():
+    """Health check endpoint"""
+    return jsonify({"status": "healthy", "timestamp": time.time()})
+
+def run_flask_server(flask_port=5000):
+    """Run Flask server in a separate thread"""
+    app.run(host='0.0.0.0', port=flask_port, debug=False, use_reloader=False)
+
+def main(path: str, port: int, flask_port: int = 5000) -> None:
+    global current_robot_config, actuated_joint_names
+    
     urdf = URDF.load(path, load_collision_meshes=True, build_collision_scene_graph=True)
     
     robot = pk.Robot.from_urdf(urdf)
@@ -28,6 +64,7 @@ def main(path: str, port: int) -> None:
     print(f"Number of links: {len(urdf.link_map)}")
     
     actuated_joints = [name for name, joint in urdf.joint_map.items() if joint.type != 'fixed']
+    actuated_joint_names = actuated_joints  # Store globally for Flask API
     print(f"Actuated joints ({len(actuated_joints)}): {actuated_joints}")
     
     initial_config = []
@@ -38,6 +75,7 @@ def main(path: str, port: int) -> None:
         initial_config.append(initial_pos)
     
     initial_config_array = np.array(initial_config)
+    current_robot_config = initial_config_array.copy()  # Initialize global config
     urdf_vis.update_cfg(initial_config_array)
     print(f"Initial configuration set with {len(initial_config)} joints")
     
@@ -95,6 +133,13 @@ def main(path: str, port: int) -> None:
     print(f"Lower body joint indices: {lower_body_indices}")
     print(f"Upper body joint indices: {upper_body_indices}")
     
+    # Start Flask server in a separate thread
+    flask_thread = threading.Thread(target=run_flask_server, args=(flask_port,), daemon=True)
+    flask_thread.start()
+    print(f"Flask server started on port {flask_port}")
+    print(f"Robot config available at: http://localhost:{flask_port}/config")
+    print(f"Health check available at: http://localhost:{flask_port}/health")
+    
     while True:
         # Solve IK for both targets
         start_time = time.time()
@@ -110,6 +155,9 @@ def main(path: str, port: int) -> None:
             # Keep lower body joints at their initial values
             current_config = initial_config_array.copy()
             current_config[upper_body_indices] = solution[upper_body_indices]
+            
+            # Store current configuration globally for Flask API
+            current_robot_config = current_config.copy()
             
             urdf_vis.update_cfg(current_config)
             
