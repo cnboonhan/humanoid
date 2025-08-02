@@ -397,7 +397,7 @@ def main(path: str, port: int, flask_port: int = 5000) -> None:
     initial_config_array = np.array(initial_config)
     current_robot_config = initial_config_array.copy()  # Initialize global config
     urdf_vis.update_cfg(initial_config_array)
-    print(f"Initial configuration set with {len(initial_config)} joints")
+    # print(f"Initial configuration set with {len(initial_config)} joints")
     
     target_link_names = ["right_palm_link", "left_palm_link"]
     
@@ -437,12 +437,12 @@ def main(path: str, port: int, flask_port: int = 5000) -> None:
     ik_target_1_position = left_palm_pos.copy()
     robot_initial_right_hand_position = right_palm_pos.copy()
     robot_initial_left_hand_position = left_palm_pos.copy()
-    print(f"Initialized IK target positions:")
-    print(f"  Right target: {ik_target_0_position}")
-    print(f"  Left target: {ik_target_1_position}")
-    print(f"Robot initial hand positions:")
-    print(f"  Right hand: {robot_initial_right_hand_position}")
-    print(f"  Left hand: {robot_initial_left_hand_position}")
+    # print(f"Initialized IK target positions:")
+    # print(f"  Right target: {ik_target_0_position}")
+    # print(f"  Left target: {ik_target_1_position}")
+    # print(f"Robot initial hand positions:")
+    # print(f"  Right hand: {robot_initial_right_hand_position}")
+    # print(f"  Left hand: {robot_initial_left_hand_position}")
     
     # Initialize hand joint positions and limits
     global left_hand_joint_positions, right_hand_joint_positions, left_hand_joint_limits, right_hand_joint_limits
@@ -451,8 +451,8 @@ def main(path: str, port: int, flask_port: int = 5000) -> None:
     joint_limits = list(urdf_vis.get_actuated_joint_limits().values())
     
     # Print all joint names to identify hand joints
-    print(f"All actuated joint names: {actuated_joint_names}")
-    print(f"Total joints: {len(actuated_joint_names)}")
+    # print(f"All actuated joint names: {actuated_joint_names}")
+    # print(f"Total joints: {len(actuated_joint_names)}")
     
     # Find hand joints by looking for "left_zero_joint" to "left_six_joint" and "right_zero_joint" to "right_six_joint"
     left_hand_joint_indices = []
@@ -461,14 +461,14 @@ def main(path: str, port: int, flask_port: int = 5000) -> None:
     for i, joint_name in enumerate(actuated_joint_names):
         if joint_name.startswith('left_') and joint_name.endswith('_joint'):
             left_hand_joint_indices.append(i)
-            print(f"Found left hand joint: {joint_name} at index {i}")
+            # print(f"Found left hand joint: {joint_name} at index {i}")
         elif joint_name.startswith('right_') and joint_name.endswith('_joint'):
             right_hand_joint_indices.append(i)
-            print(f"Found right hand joint: {joint_name} at index {i}")
+            # print(f"Found right hand joint: {joint_name} at index {i}")
     
     # Initialize hand joint positions and limits
     if len(left_hand_joint_indices) > 0 and len(right_hand_joint_indices) > 0:
-        print(f"Using {len(left_hand_joint_indices)} left hand joints and {len(right_hand_joint_indices)} right hand joints")
+        # print(f"Using {len(left_hand_joint_indices)} left hand joints and {len(right_hand_joint_indices)} right hand joints")
         
         # Get left hand joint positions and limits
         left_hand_joint_positions = initial_config_array[left_hand_joint_indices].copy()
@@ -479,7 +479,7 @@ def main(path: str, port: int, flask_port: int = 5000) -> None:
         right_hand_joint_limits = [joint_limits[i] for i in right_hand_joint_indices]
     else:
         # Fallback: assume last 6 joints are hand joints
-        print("No hand joints found by name, using last 6 joints as fallback")
+        # print("No hand joints found by name, using last 6 joints as fallback")
         hand_joint_count = 6  # 3 joints per hand
         left_hand_joint_positions = initial_config_array[-hand_joint_count:-hand_joint_count//2].copy()
         right_hand_joint_positions = initial_config_array[-hand_joint_count//2:].copy()
@@ -621,7 +621,7 @@ def main(path: str, port: int, flask_port: int = 5000) -> None:
             
             # Apply hand joint positions based on pinch states
             if left_hand_joint_positions is not None:
-                print(f"Applying left hand joints: {left_hand_joint_positions}")
+                # print(f"Applying left hand joints: {left_hand_joint_positions}")
                 # Find left hand joint indices
                 left_hand_joint_indices = []
                 for i, joint_name in enumerate(actuated_joint_names):
@@ -630,12 +630,16 @@ def main(path: str, port: int, flask_port: int = 5000) -> None:
                 
                 if len(left_hand_joint_indices) > 0:
                     # Apply left hand joint positions
+                    step = 0
                     for i, pos in zip(left_hand_joint_indices, left_hand_joint_positions):
-                        current_config[i] = pos
-                        print(f"Set left hand joint {i} ({actuated_joint_names[i]}) to {pos}")
+                        if step == 0:
+                            step += 1
+                        else:
+                            current_config[i] = pos
+                        # print(f"Set left hand joint {i} ({actuated_joint_names[i]}) to {pos}")
             
             if right_hand_joint_positions is not None:
-                print(f"Applying right hand joints: {right_hand_joint_positions}")
+                # print(f"Applying right hand joints: {right_hand_joint_positions}")
                 # Find right hand joint indices
                 right_hand_joint_indices = []
                 for i, joint_name in enumerate(actuated_joint_names):
@@ -644,9 +648,13 @@ def main(path: str, port: int, flask_port: int = 5000) -> None:
                 
                 if len(right_hand_joint_indices) > 0:
                     # Apply right hand joint positions
+                    step = 0
                     for i, pos in zip(right_hand_joint_indices, right_hand_joint_positions):
-                        current_config[i] = pos
-                        print(f"Set right hand joint {i} ({actuated_joint_names[i]}) to {pos}")
+                        if step == 0:
+                            step += 1
+                        else:
+                            current_config[i] = pos
+                        # print(f"Set right hand joint {i} ({actuated_joint_names[i]}) to {pos}")
             
             # Store current configuration globally for Flask API
             current_robot_config = current_config.copy()
