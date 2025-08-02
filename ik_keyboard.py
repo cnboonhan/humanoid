@@ -26,6 +26,7 @@ actuated_joint_names = None
 # Keyboard control variables
 keyboard_step_size = 0.01  # meters per key press
 keyboard_pressed = set()
+gripper_step_size = 0.1  # radians per button press
 
 # Create Flask app
 app = Flask(__name__)
@@ -227,6 +228,59 @@ def main(path: str, port: int, flask_port: int = 5000) -> None:
         urdf_vis.update_cfg(initial_config_array)
         print("Reset to initial pose")
     
+    # Add hand joint control sliders
+    server.gui.add_markdown("### Hand Joint Controls")
+    
+    right_gripper_slider = server.gui.add_slider("Right Hand Joints", 0.0, 1.0, 0.1, 0.5)
+    left_gripper_slider = server.gui.add_slider("Left Hand Joints", 0.0, 1.0, 0.1, 0.5)
+    
+    @right_gripper_slider.on_update
+    def _(_):
+        global current_robot_config, actuated_joint_names
+        new_config = current_robot_config.copy()
+        gripper_value = right_gripper_slider.value
+        joint_limits = urdf_vis.get_actuated_joint_limits()
+        for i, joint_name in enumerate(actuated_joint_names):
+            if joint_name in ['right_zero_joint', 'right_one_joint', 'right_two_joint', 'right_three_joint', 'right_four_joint', 'right_five_joint', 'right_six_joint']:
+                # Get actual joint limits
+                lower, upper = joint_limits[joint_name]
+                lower = lower if lower is not None else -np.pi
+                upper = upper if upper is not None else np.pi
+                # Reverse the entire right hand direction
+                reversed_value = 1.0 - gripper_value
+                # For thumb joints (zero, one, two), reverse the direction again (double reverse = normal)
+                if joint_name in ['right_zero_joint', 'right_one_joint', 'right_two_joint']:
+                    # Use normal value for thumb joints since we already reversed the whole hand
+                    new_config[i] = lower + gripper_value * (upper - lower)
+                else:
+                    # Use reversed value for other finger joints
+                    new_config[i] = lower + reversed_value * (upper - lower)
+        current_robot_config = new_config.copy()
+        urdf_vis.update_cfg(new_config)
+    
+    @left_gripper_slider.on_update
+    def _(_):
+        global current_robot_config, actuated_joint_names
+        new_config = current_robot_config.copy()
+        gripper_value = left_gripper_slider.value
+        joint_limits = urdf_vis.get_actuated_joint_limits()
+        for i, joint_name in enumerate(actuated_joint_names):
+            if joint_name in ['left_zero_joint', 'left_one_joint', 'left_two_joint', 'left_three_joint', 'left_four_joint', 'left_five_joint', 'left_six_joint']:
+                # Get actual joint limits
+                lower, upper = joint_limits[joint_name]
+                lower = lower if lower is not None else -np.pi
+                upper = upper if upper is not None else np.pi
+                # For thumb joints (zero, one, two), reverse the direction
+                if joint_name in ['left_zero_joint', 'left_one_joint', 'left_two_joint']:
+                    # Reverse the slider value for thumb joints
+                    reversed_value = 1.0 - gripper_value
+                    new_config[i] = lower + reversed_value * (upper - lower)
+                else:
+                    # Map slider value (0-1) to joint position within actual limits
+                    new_config[i] = lower + gripper_value * (upper - lower)
+        current_robot_config = new_config.copy()
+        urdf_vis.update_cfg(new_config)
+    
     # Add keyboard step size control
     step_size_handle = server.gui.add_slider("Keyboard Step Size (m)", 0.001, 0.1, 0.01, 0.01)
     
@@ -252,6 +306,7 @@ def main(path: str, port: int, flask_port: int = 5000) -> None:
     **General:**
     - Adjust step size using the slider above
     - Use the transform controls for precise positioning
+    - Use the hand joint sliders above to control all hand joints
     """)
     
     # Set up keyboard event listeners
@@ -261,6 +316,7 @@ def main(path: str, port: int, flask_port: int = 5000) -> None:
     print("Keyboard controls enabled:")
     print("Right hand: TFGH (XY) + RY (Z)")
     print("Left hand: IJKL (XY) + UO (Z)")
+    print("Hand joint controls: Use GUI sliders")
     print("Adjust step size with the GUI slider")
     
     # Define upper body joint indices (arms and hands only)
@@ -298,6 +354,13 @@ def main(path: str, port: int, flask_port: int = 5000) -> None:
             # Keep lower body joints at their initial values
             current_config = initial_config_array.copy()
             current_config[upper_body_indices] = solution[upper_body_indices]
+            
+            # Preserve hand joint changes from sliders
+            for i, joint_name in enumerate(actuated_joint_names):
+                if joint_name in ['right_zero_joint', 'right_one_joint', 'right_two_joint', 'right_three_joint', 'right_four_joint', 'right_five_joint', 'right_six_joint', 
+                                 'left_zero_joint', 'left_one_joint', 'left_two_joint', 'left_three_joint', 'left_four_joint', 'left_five_joint', 'left_six_joint']:
+                    # Keep the hand joint values from the current robot config (set by sliders)
+                    current_config[i] = current_robot_config[i]
             
             # Store current configuration globally for Flask API
             current_robot_config = current_config.copy()
