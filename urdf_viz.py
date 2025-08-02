@@ -1,4 +1,4 @@
-# python3 urdf_viz.py --path .venv/lib/python3.11/site-packages/mani_skill/assets/robots/g1_humanoid/g1_simplified_upper_body.urdf  --port 8081
+# python3 urdf_viz.py --path .venv/lib/python3.11/site-packages/mani_skill/assets/robots/g1_humanoid/g1.urdf  --port 8081
 from __future__ import annotations
 
 import time
