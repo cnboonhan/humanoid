@@ -1,12 +1,10 @@
-# python3 ik.py --path .venv/lib/python3.11/site-packages/mani_skill/assets/robots/g1_humanoid/g1_simplified_upper_body.urdf  --port 8080
+# python3 urdf_viz.py --path .venv/lib/python3.11/site-packages/mani_skill/assets/robots/g1_humanoid/g1_simplified_upper_body.urdf  --port 8081
 from __future__ import annotations
 
 import time
-from typing import Literal
 
 import numpy as np
 import tyro
-from robot_descriptions.loaders.yourdfpy import load_robot_description
 from yourdfpy import URDF
 
 import viser
@@ -46,7 +44,28 @@ def main(path: str, port: int) -> None:
 
     server = viser.ViserServer(port=port)
 
-    urdf = URDF.load(path)
+    urdf = URDF.load(path, load_collision_meshes=True, build_collision_scene_graph=True)
+
+    # Print all links information
+    print(f"Robot name: {urdf.robot}")
+    print(f"Number of joints: {len(urdf.joint_map)}")
+    print(f"Number of links: {len(urdf.link_map)}")
+    print("\nAll links:")
+    for i, (link_name, link) in enumerate(urdf.link_map.items()):
+        print(f"  {i+1:2d}. {link_name}")
+        if link.inertial:
+            print(f"      Mass: {link.inertial.mass:.4f} kg")
+        if link.visuals:
+            print(f"      Visuals: {len(link.visuals)}")
+        if link.collisions:
+            print(f"      Collisions: {len(link.collisions)}")
+    
+    print(f"\nActuated joints ({len([j for j in urdf.joint_map.values() if j.type != 'fixed'])}):")
+    for i, (joint_name, joint) in enumerate(urdf.joint_map.items()):
+        if joint.type != 'fixed':
+            print(f"  {i+1:2d}. {joint_name} ({joint.type})")
+            if joint.limit:
+                print(f"      Limits: [{joint.limit.lower:.3f}, {joint.limit.upper:.3f}]")
 
     viser_urdf = ViserUrdf(
         server,
