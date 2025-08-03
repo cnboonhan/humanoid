@@ -176,6 +176,83 @@ def apply_orientation_adjustment(position, roll_adjustment, pitch_adjustment, ya
     # print(f"{hand_name} position adjusted: {position} -> {adjusted_position}")
     return adjusted_position
 
+def calculate_palm_orientation_to_origin(hand_position, target_point=None):
+    """
+    Calculate palm orientation to face a target point.
+    
+    Args:
+        hand_position: Current hand position [x, y, z]
+        target_point: Target point to face (uses global right_hand_target_point if None)
+    
+    Returns:
+        quaternion: Quaternion representing palm orientation to face target
+    """
+    global right_hand_target_point
+    if target_point is None:
+        target_point = right_hand_target_point
+    if hand_position is None:
+        return np.array([1, 0, 0, 0])  # Default identity quaternion
+    
+    # Calculate direction vector from target to hand (reversed)
+    direction = hand_position - target_point
+    distance = np.linalg.norm(direction)
+    
+    print(f"Hand position: {hand_position}, target point: {target_point}")
+    print(f"Direction vector: {direction}, distance: {distance}")
+    
+    if distance < 0.001:  # Hand is very close to target
+        print("Hand too close to target, using identity quaternion")
+        return np.array([1, 0, 0, 0])  # Default identity quaternion
+    
+    # Normalize direction vector
+    direction = direction / distance
+    
+    # Calculate rotation to align palm normal (assumed to be -Z axis) with direction
+    # We want the palm to face the target, so we need to rotate the palm normal to point towards the target
+    
+    # Try different palm normal directions
+    palm_normal = np.array([0, 0, -1])  # Palm normal pointing forward (back to original)
+    # palm_normal = np.array([0, 0, 1])   # Palm normal pointing backward
+    # palm_normal = np.array([0, 1, 0])   # Palm normal pointing up
+    # palm_normal = np.array([1, 0, 0])   # Palm normal pointing right
+    
+    print(f"Using palm normal: {palm_normal}")
+    
+    # Cross product to find rotation axis
+    rotation_axis = np.cross(palm_normal, direction)
+    axis_norm = np.linalg.norm(rotation_axis)
+    
+    if axis_norm < 0.001:  # Vectors are parallel or anti-parallel
+        if np.dot(palm_normal, direction) > 0:
+            return np.array([1, 0, 0, 0])  # Already aligned
+        else:
+            # Anti-parallel, rotate 180 degrees around X axis
+            return np.array([0, 1, 0, 0])
+    
+    # Normalize rotation axis
+    rotation_axis = rotation_axis / axis_norm
+    
+    # Calculate rotation angle
+    cos_angle = np.dot(palm_normal, direction)
+    cos_angle = np.clip(cos_angle, -1, 1)  # Clamp to valid range
+    angle = np.arccos(cos_angle)
+    
+    # Convert to quaternion
+    sin_half_angle = np.sin(angle / 2)
+    cos_half_angle = np.cos(angle / 2)
+    
+    quaternion = np.array([
+        cos_half_angle,
+        rotation_axis[0] * sin_half_angle,
+        rotation_axis[1] * sin_half_angle,
+        rotation_axis[2] * sin_half_angle
+    ])
+    
+    print(f"Rotation axis: {rotation_axis}, angle: {np.degrees(angle):.1f}°")
+    print(f"Calculated quaternion: {quaternion}")
+    
+    return quaternion
+
 
 
 def update_hand_joints_based_on_pinch(pinch_state, hand_joint_positions, joint_limits, hand_name, target_positions=None, lerp_factor=0.02):
@@ -439,6 +516,12 @@ initial_hand_tracking_right_position = None
 initial_hand_tracking_left_orientation = None
 initial_hand_tracking_right_orientation = None
 
+# Global variable for right hand target point (default: origin)
+right_hand_target_point = np.array([0.02, 0.2, 1.5])
+
+# Global variable for left hand target point (default: origin)
+left_hand_target_point = np.array([0.02, 0.2, 1.5])
+
 
 
 # Global variables to store IK targets for hand tracking control
@@ -660,10 +743,33 @@ def main(path: str, port: int, flask_port: int = 5000) -> None:
     # Add reset button
     reset_button = server.gui.add_button("Reset to Initial Pose")
     
+    # Add target point configuration sliders
+    target_x_slider = server.gui.add_slider("Right Hand Target X", -1.0, 1.0, 0.01, 0.0)
+    target_y_slider = server.gui.add_slider("Right Hand Target Y", -1.0, 1.0, 0.01, 0.0)
+    target_z_slider = server.gui.add_slider("Right Hand Target Z", -1.0, 1.0, 0.01, 0.0)
+    
     @reset_button.on_click
     def _(_):
         urdf_vis.update_cfg(initial_config_array)
         print("Reset to initial pose")
+    
+    @target_x_slider.on_update
+    def update_target_x(_):
+        global right_hand_target_point
+        right_hand_target_point[0] = target_x_slider.value
+        print(f"Right hand target X updated to: {target_x_slider.value}")
+    
+    @target_y_slider.on_update
+    def update_target_y(_):
+        global right_hand_target_point
+        right_hand_target_point[1] = target_y_slider.value
+        print(f"Right hand target Y updated to: {target_y_slider.value}")
+    
+    @target_z_slider.on_update
+    def update_target_z(_):
+        global right_hand_target_point
+        right_hand_target_point[2] = target_z_slider.value
+        print(f"Right hand target Z updated to: {target_z_slider.value}")
     
     
     # Define upper body joint indices (arms and hands only)
@@ -769,11 +875,20 @@ def main(path: str, port: int, flask_port: int = 5000) -> None:
             ik_target_1.position = left_target_pos
         
         try:
+            # Calculate right hand orientation to face target point
+            right_hand_quaternion = calculate_palm_orientation_to_origin(right_target_pos, right_hand_target_point)
+            
+            # Debug: Print the quaternions to see if they're changing
+            print(f"Right hand quaternion: {right_hand_quaternion}")
+            print(f"Default quaternion: {ik_target_0.wxyz}")
+            print(f"Are they different? {not np.allclose(right_hand_quaternion, ik_target_0.wxyz)}")
+            print(f"Right target pos: {right_target_pos}, target point: {right_hand_target_point}")
+            
             solution = solve_ik_with_multiple_targets(
                 robot=robot,
                 target_link_names=target_link_names,
                 target_positions=np.array([right_target_pos, left_target_pos]),
-                target_wxyzs=np.array([ik_target_0.wxyz, ik_target_1.wxyz]),
+                target_wxyzs=np.array([right_hand_quaternion, ik_target_1.wxyz]),
             )
             
             # Create a new configuration that only updates upper body joints
