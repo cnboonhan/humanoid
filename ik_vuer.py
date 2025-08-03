@@ -211,9 +211,9 @@ def calculate_palm_orientation_to_origin(hand_position, target_point=None):
     # We want the palm to face the target, so we need to rotate the palm normal to point towards the target
     
     # Try different palm normal directions
-    palm_normal = np.array([0, 0, -1])  # Palm normal pointing forward (back to original)
+    # palm_normal = np.array([0, 0, -1])  # Palm normal pointing forward (back to original)
     # palm_normal = np.array([0, 0, 1])   # Palm normal pointing backward
-    # palm_normal = np.array([0, 1, 0])   # Palm normal pointing up
+    palm_normal = np.array([0, -1, 0])   # Palm normal pointing down (negated)
     # palm_normal = np.array([1, 0, 0])   # Palm normal pointing right
     
     print(f"Using palm normal: {palm_normal}")
@@ -517,7 +517,7 @@ initial_hand_tracking_left_orientation = None
 initial_hand_tracking_right_orientation = None
 
 # Global variable for right hand target point (default: origin)
-right_hand_target_point = np.array([0.02, 0.2, 1.5])
+right_hand_target_point = np.array([0.02, 0.2, 0.8])  # Closer to hand level
 
 # Global variable for left hand target point (default: origin)
 left_hand_target_point = np.array([0.02, 0.2, 1.5])
@@ -877,6 +877,18 @@ def main(path: str, port: int, flask_port: int = 5000) -> None:
         try:
             # Calculate right hand orientation to face target point
             right_hand_quaternion = calculate_palm_orientation_to_origin(right_target_pos, right_hand_target_point)
+            
+            # Visualize the target point being tracked
+            try:
+                server.scene.add_point_cloud(
+                    "/target_point",
+                    points=np.array([right_hand_target_point]),
+                    colors=np.array([[0, 1, 0]]),  # Green color
+                    point_size=0.05
+                )
+            except AttributeError:
+                # If add_point_cloud doesn't exist, just print the target position
+                print(f"Target point at: {right_hand_target_point}")
             
             # Debug: Print the quaternions to see if they're changing
             print(f"Right hand quaternion: {right_hand_quaternion}")

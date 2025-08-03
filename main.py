@@ -173,7 +173,8 @@ class HumanoidPlaceAppleInBowl(HumanoidPickPlaceEnv):
             scale=[scale * 0.04] * 3,  # Scale down by 100x to make box much smaller
             pose=fix_rotation_pose,
         )
-        builder.initial_pose = sapien.Pose(p=[0.02, -0.2, 1.5])  # Moved box closer to robot
+        builder.initial_pose = sapien.Pose(p=[0.02, -0.25, 1.5])  # Moved box closer to robot
+
         self.box = builder.build(name="box")
 
     def evaluate(self):
